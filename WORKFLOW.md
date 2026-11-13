@@ -54,7 +54,8 @@ Without server-enforced protection, human coordination is still necessary to pre
 - Mechanical conflicts may be fixed by the agreed writer. Changes to behavior, schema, data meaning or API semantics require the affected owner's confirmation. Never resolve by discarding a feature or blindly selecting ours/theirs.
 - If main breaks, pause unrelated merges. The lead chooses a small verified fix or a revert PR for the faulty squash commit, then verifies main again. Do not rewrite shared history.
 - Interface-breaking changes follow docs/INTERFACES.md. The lead checks dependent tasks before merging.
-- Before a release/demo, the lead announces a short freeze, records the known-good main SHA and verifies the demo. Only targeted fixes enter during that freeze. Deployment happens from a verified integrated revision, not an arbitrary developer branch.
+- Delivery for this event is task branch -> PR -> main -> verify -> deploy. Do not create GitHub Releases or release tags as part of the normal workflow.
+- Before deployment/demo, the lead announces a short freeze, records the known-good main SHA and verifies the demo. Only targeted fixes enter during that freeze. Deploy that exact verified main revision and record the deployed SHA and outcome in the PR or deployment record. A merge alone does not prove deployment succeeded.
 
 ## 6. Alignment and operator handover
 
