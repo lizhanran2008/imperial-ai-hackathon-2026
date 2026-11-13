@@ -1,26 +1,34 @@
-# Imperial AI Hackathon — 14 November 2026
+# Imperial AI Hackathon — team workspace
 
-Shared workspace for our four-person team.
+Preparation for 14 November 2026. No application or technology stack has been selected yet.
 
-## Start here
+## Read first
 
-This repository contains collaboration preparation only. The challenge, stack, product scope and deployment target are not selected yet.
+1. [CONSTITUTION.md](CONSTITUTION.md): ownership, authority and common rules.
+2. [AGENTS.md](AGENTS.md): give this file to every agent before it writes code.
+3. [WORKFLOW.md](WORKFLOW.md): task assignment, pull/push, review, merge and recovery.
+4. [PROJECT.md](PROJECT.md): product alignment, role roster and kickoff gate.
+5. [Interface protocol](docs/INTERFACES.md) and [decision record](docs/DECISIONS.md).
 
-1. Read `WORKFLOW.md` and `AGENTS.md`.
-2. Agree on one demonstrable user journey and record decisions in `PROJECT.md`.
-3. Select one stack, package manager and shared data format together.
-4. Build a minimal runnable skeleton; record exact install, start and test commands below.
-5. Deliver features through short branches and integrate each working slice.
+Choose your own tools. Team members share project contracts and the delivery protocol; personal account connections and machine settings stay outside the repository.
 
-## Tool choice
+## First task
 
-Each teammate is free to use their preferred editor, AI assistant and Git client. Only the shared project setup and collaboration workflow need to be consistent. Personal account connections and local tool configuration are managed individually.
+Accept the collaborator invitation and clone the repository. Read the documents above, then use the GitHub Task Issue template to agree a task with the integration lead. A task has one owner, bounded paths and explicit acceptance steps. Push to its short branch and hand off via a PR; the lead integrates ready PRs serially.
 
-## Commands
+## Reproducible commands — UNCONFIGURED
 
-Install: TBD after stack selection.
-Run: TBD.
-Check: TBD.
-Demo: TBD.
+| Operation | Exact command / prerequisites |
+| --- | --- |
+| Install | TBD after stack and versions are chosen |
+| Run | TBD |
+| Check/build | TBD; must fail visibly on errors |
+| Core demo smoke test | TBD; include expected result |
 
-Commit an `.env.example` containing variable names and dummy values when integrations are chosen. Keep real values in ignored local environment files.
+The skeleton task must replace these entries with tested commands and configure corresponding PR checks when appropriate. Until then, documentation validation is the only available validation; it does not establish build readiness. No placeholder workflow reports a fake green build.
+
+Once integrations are chosen, commit `.env.example` with variable names and dummy values only. Keep real credentials and local environment files untracked.
+
+## Enforcement status
+
+Current rules are team agreements. GitHub reported that branch protection requires a plan upgrade for this private repository; main is not technically protected. No application CI or automatic merge service is configured. The integration lead operates the merge queue manually through PRs.
