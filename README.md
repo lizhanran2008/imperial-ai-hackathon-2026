@@ -1,6 +1,6 @@
 # Imperial AI Hackathon — 14 November 2026
 
-Team workspace owned by `lizhanran2008`.
+Shared workspace for our four-person team.
 
 ## Start here
 
@@ -12,9 +12,9 @@ This repository contains collaboration preparation only. The challenge, stack, p
 4. Build a minimal runnable skeleton; record exact install, start and test commands below.
 5. Deliver features through short branches and integrate each working slice.
 
-## Local tools
+## Tool choice
 
-Open this project directory in Antigravity and in your local ChatGPT/Codex session. A cloud chat needs committed code or explicitly shared context to inspect current work. GitHub CLI uses `lizhanran2008`; the separate built-in ChatGPT GitHub connection is unchanged.
+Each teammate is free to use their preferred editor, AI assistant and Git client. Only the shared project setup and collaboration workflow need to be consistent. Personal account connections and local tool configuration are managed individually.
 
 ## Commands
 

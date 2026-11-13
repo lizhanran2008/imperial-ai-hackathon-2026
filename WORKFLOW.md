@@ -24,11 +24,11 @@ git switch -c feat/yourname-feature
 
 Aim to integrate every working slice; review progress roughly hourly. Avoid leaving all merges until the final hour. If main breaks, fix it immediately or revert the specific faulty change.
 
-## ChatGPT and Antigravity on one machine
+## Working with your tools
 
-Default: Antigravity implements while ChatGPT reviews a stable diff and plans integration. Before review, pause edits and name the branch and commit (or say that changes are uncommitted).
+Each teammate chooses their own tools and working style. Hand off a stable branch/commit, a short description of the change and verification results for review.
 
-Only one writer per checkout. For simultaneous implementation, create separate Git worktrees and branches. Both agents read AGENTS.md, PROJECT.md and this file. Decisions live in the repo so both tools see them.
+If multiple tools edit code concurrently, use separate checkouts and branches to avoid overwriting changes. Coding agents should read AGENTS.md, PROJECT.md and this file. Record shared decisions in the repo.
 
 ## Shared-file ownership
 
