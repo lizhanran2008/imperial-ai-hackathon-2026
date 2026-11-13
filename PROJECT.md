@@ -26,7 +26,8 @@ All four members may implement features. Repository ownership and integration du
 - Stack, runtime versions and package manager: TBD
 - Installation, run and check commands: UNCONFIGURED in README.md
 - Interface owners and canonical contracts: UNCONFIGURED in docs/INTERFACES.md
-- Deployment target and release operator: TBD
+- Deployment target and deployment operator: TBD
+- Delivery policy: feature branch -> PR -> main -> verify -> deploy. GitHub Releases and release tags are not required for this event.
 
 ## Start gate
 
