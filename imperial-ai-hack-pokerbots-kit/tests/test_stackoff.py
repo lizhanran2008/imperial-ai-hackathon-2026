@@ -116,42 +116,38 @@ class AllInOverAReraise(unittest.TestCase):
         self.assertTrue(_jams(["Ad", "5d"]))
 
 
-def _facing_big_3bet(hole):
-    """As jam_callers._facing_3bet, but the small blind re-raised to 305: 240 more to call."""
-    state = jam_callers._facing_3bet(hole)
-    state["stacks"][0], state["bets"][0] = 1695, 305
-    state["pot"], state["to_call"], state["min_raise_to"] = 390, 240, 545
-    state["history"][-2]["amount"] = 305
-    return state
-
-
-def _jams_big(hole, on=True, folds=8):
-    saved = preflop._JAM_NEEDS_EDGE
-    preflop._JAM_NEEDS_EDGE = on
-    try:
-        d = preflop.decide(_facing_big_3bet(hole), jam_callers._model(["fold"] * folds).profiles())
-    finally:
-        preflop._JAM_NEEDS_EDGE = saved
-    return d.get("action") == "raise" and d.get("amount", 0) >= 1900
+def _jam_allowed(hole, to_call, width, edge=400.0, level=2):
+    """PreflopBrain._jam_ok for an all-in over a re-raise costing `to_call` more, against a seat
+    whose re-raising range is read as `width` of all hands."""
+    brain = preflop._BRAIN
+    brain.bb = 20
+    return brain._jam_ok(preflop.cls_index(hole[0], hole[1]), level, edge, to_call, width)
 
 
 class AllInOverABigReraise(unittest.TestCase):
     WEAK = (["Ah", "Td"], ["Ah", "Jh"], ["Ad", "5s"], ["7d", "7s"], ["Jd", "8d"])
+    BIG = (["As", "Ac"], ["Kh", "Kc"], ["Ad", "Kd"], ["Ad", "Kc"], ["Th", "Tc"])
 
-    def test_weak_aces_and_small_pairs_do_not_move_in(self):
+    def test_weak_hands_do_not_move_in_on_a_tight_reraiser(self):
         for hole in self.WEAK:
-            self.assertFalse(_jams_big(hole), hole)
+            self.assertFalse(_jam_allowed(hole, 240, 0.12), hole)
 
-    def test_the_rule_is_what_stops_them(self):
-        self.assertTrue(any(_jams_big(hole, on=False) for hole in self.WEAK))
+    def test_weak_hands_still_move_in_on_a_seat_that_reraises_often(self):
+        # Live round 42: a limp-re-raiser to 576 that folded to most all-ins.
+        for hole in self.WEAK:
+            self.assertTrue(_jam_allowed(hole, 416, 0.30), hole)
 
     def test_big_hands_are_untouched(self):
-        for hole in (["As", "Ac"], ["Kh", "Kc"], ["Ad", "Kd"], ["Ad", "Kc"], ["Th", "Tc"]):
-            self.assertEqual(_jams_big(hole), _jams_big(hole, on=False), hole)
+        for hole in self.BIG:
+            self.assertTrue(_jam_allowed(hole, 240, 0.05), hole)
 
     def test_an_ordinary_reraise_is_untouched(self):
         for hole in (["Ah", "Td"], ["Ad", "5d"], ["7d", "7s"]):
-            self.assertEqual(_jams(hole, folds=8), _jams(hole, on=False, folds=8), hole)
+            self.assertTrue(_jam_allowed(hole, 169, 0.05), hole)
+
+    def test_all_ins_over_a_single_raise_are_untouched(self):
+        for hole in self.WEAK:
+            self.assertTrue(_jam_allowed(hole, 400, 0.05, edge=1.0, level=1), hole)
 
 
 class WeakHandWithAQuarterOfTheStackIn(unittest.TestCase):
