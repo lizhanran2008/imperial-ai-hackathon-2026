@@ -13,7 +13,7 @@ How decide() works
       loosely each seat is expected to call. The best positive option is played.
     * Stateless: all opponent information comes from `profiles` (vpip, pfr, three_bet, hands).
       Optional richer keys are used when the opponent model provides them:
-      fold_to_steal, fold_to_3bet, call_allin (each a 0-1 frequency).
+      fold_to_steal, fold_to_3bet, call_allin, call_jam (each a 0-1 frequency).
 """
 import base64
 import math
@@ -556,6 +556,10 @@ class _Prof(object):
             return min(0.9, max(0.004, d))
         return min(0.35, max(0.004, _AI_Q0 * self.ml))
 
+    def call_jam(self):
+        d = self._opt("call_jam")
+        return None if d is None else min(0.97, max(0.03, d))
+
     def opt_raise(self):
         return min(0.9, 0.15 * self.ma)
 
@@ -698,6 +702,7 @@ class PreflopBrain(object):
         my_bet = bets[me]
         my_total = my_bet + stacks[me]
         opp = self.opp
+        bb_ = st["big_blind"]
         items = []
         # Seats that are already all-in cannot fold: they always see a showdown for the main pot.
         inv_l = 0.0
@@ -716,6 +721,12 @@ class PreflopBrain(object):
             q = opp[j].ai_q()
             r = q if q < xj else xj
             p = r / xj if xj > 1e-9 else 1.0
+            # A seat that has already raised and is on record calling all-ins more often than
+            # the model expects: believe the record. (Never used to expect more folds.)
+            d = opp[j].call_jam() if bets[j] > bb_ else None
+            if d is not None and d > p:
+                p = d
+                r = d * xj
             e = self._eq(0.0, r)
             if inv_l > 0.0:
                 e = 1.0 / (1.0 + (1.0 - e) / (e if e > 0.02 else 0.02) + inv_l)
