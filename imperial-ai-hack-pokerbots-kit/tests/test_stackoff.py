@@ -116,5 +116,71 @@ class AllInOverAReraise(unittest.TestCase):
         self.assertTrue(_jams(["Ad", "5d"]))
 
 
+def _facing_big_3bet(hole):
+    """As jam_callers._facing_3bet, but the small blind re-raised to 305: 240 more to call."""
+    state = jam_callers._facing_3bet(hole)
+    state["stacks"][0], state["bets"][0] = 1695, 305
+    state["pot"], state["to_call"], state["min_raise_to"] = 390, 240, 545
+    state["history"][-2]["amount"] = 305
+    return state
+
+
+def _jams_big(hole, on=True, folds=8):
+    saved = preflop._JAM_NEEDS_EDGE
+    preflop._JAM_NEEDS_EDGE = on
+    try:
+        d = preflop.decide(_facing_big_3bet(hole), jam_callers._model(["fold"] * folds).profiles())
+    finally:
+        preflop._JAM_NEEDS_EDGE = saved
+    return d.get("action") == "raise" and d.get("amount", 0) >= 1900
+
+
+class AllInOverABigReraise(unittest.TestCase):
+    WEAK = (["Ah", "Td"], ["Ah", "Jh"], ["Ad", "5s"], ["7d", "7s"], ["Jd", "8d"])
+
+    def test_weak_aces_and_small_pairs_do_not_move_in(self):
+        for hole in self.WEAK:
+            self.assertFalse(_jams_big(hole), hole)
+
+    def test_the_rule_is_what_stops_them(self):
+        self.assertTrue(any(_jams_big(hole, on=False) for hole in self.WEAK))
+
+    def test_big_hands_are_untouched(self):
+        for hole in (["As", "Ac"], ["Kh", "Kc"], ["Ad", "Kd"], ["Ad", "Kc"], ["Th", "Tc"]):
+            self.assertEqual(_jams_big(hole), _jams_big(hole, on=False), hole)
+
+    def test_an_ordinary_reraise_is_untouched(self):
+        for hole in (["Ah", "Td"], ["Ad", "5d"], ["7d", "7s"]):
+            self.assertEqual(_jams(hole, folds=8), _jams(hole, on=False, folds=8), hole)
+
+
+class WeakHandWithAQuarterOfTheStackIn(unittest.TestCase):
+    """Live round 41, hand 823: ace-high called 394 on the flop of a re-raised pot, then the rest."""
+    BOARD = ["4s", "2d", "5h"]
+
+    def test_ace_high_folds_once_the_call_commits_a_quarter_of_the_stack(self):
+        state = _facing(["Ah", "Qd"], self.BOARD, 764, 394)
+        saved = v4.PARAMS["commit_min"]
+        v4.PARAMS["commit_min"] = 10 ** 9
+        try:
+            self.assertEqual(_act(state), "call")            # what it used to do
+        finally:
+            v4.PARAMS["commit_min"] = saved
+        self.assertEqual(_act(state), "fold")
+
+    def test_an_overpair_still_calls(self):
+        self.assertEqual(_act(_facing(["Qs", "Qc"], self.BOARD, 764, 394)), "call")
+
+    def test_a_small_pot_is_untouched(self):
+        state = _facing(["Ah", "Qd"], self.BOARD, 150, 75)
+        saved = v4.PARAMS["commit_min"]
+        results = []
+        for value in (saved, 10 ** 9):
+            v4.PARAMS["commit_min"] = value
+            results.append(_act(state))
+        v4.PARAMS["commit_min"] = saved
+        self.assertEqual(results[0], results[1])
+
+
 if __name__ == "__main__":
     unittest.main()

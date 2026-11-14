@@ -96,6 +96,7 @@ PARAMS = {
     "use_size_buckets": True, "use_seat_width": True, "use_raise_risk": True,
     "use_stackoff_guard": True, "big_bet_min": 400, "big_bet_seff": 0.88,
     "shove_mult": 2.5, "shove_min": 300, "shove_seff": 0.96, "raise_commit_seff": 0.90,
+    "commit_min": 500, "commit_bet": 300, "commit_seff": 0.60,
     "use_runover_guard": True, "use_dead_bot": True, "use_bluffs": True,
     # Skip the calculation for a hand with seff under shortcut_seff against two
     # or more opponents: check, or fold to a bet of at least shortcut_price of
@@ -1440,7 +1441,7 @@ def stackoff_floor(to_call, pot, combo_draw=False):
 
 
 def choose_facing_bet(state, T, tb, opps, profs, eq, bettor, behind, in_position, streets_left, combo_draw,
-                      seff=None):
+                      seff=None, draw=False):
     p = PARAMS
     legal = state["legal_actions"]
     pot = state["pot"]
@@ -1462,6 +1463,11 @@ def choose_facing_bet(state, T, tb, opps, profs, eq, bettor, behind, in_position
     action = {"action": "call"} if eq >= need else {"action": "fold"}
     guard = p["use_stackoff_guard"] and seff is not None
     weak = guard and seff < stackoff_floor(to_call, pot, combo_draw)
+    if guard and not weak and not draw and to_call >= p["commit_bet"] and seff < p["commit_seff"]:
+        # A real bet that takes our chips in this hand past commit_min, with a hand in the
+        # bottom part of what is possible and no draw: ace-high call-downs in re-raised pots.
+        start = 100 * (state.get("big_blind") or 20)
+        weak = max(0, start - stack) + to_call >= p["commit_min"]
     if weak:
         if action["action"] == "call":
             STATS["stackoff_folds"] += 1
@@ -1658,8 +1664,9 @@ def _decide(state, profiles, out):
     combo = street != "river" and seff >= p["floor_combo"][0 if street == "flop" else 1] \
         and _is_combo_draw(hero_ids, ids)
     out["eq"] = eq
+    draw = street != "river" and _is_draw(hero_ids, ids)
     return choose_facing_bet(state, T, tb, opps, profs, eq, bettor, behind, in_position, streets_left, combo,
-                             seff)
+                             seff, draw)
 
 
 def _is_draw(hero_ids, ids):
