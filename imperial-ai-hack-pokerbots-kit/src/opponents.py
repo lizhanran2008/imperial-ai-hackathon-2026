@@ -21,6 +21,7 @@ class _SeatCounters:
         "passive_actions",
         "faced_bet",
         "folded_to_bet",
+        "flops_seen",
         "showdowns",
     )
 
@@ -34,6 +35,7 @@ class _SeatCounters:
         self.passive_actions = 0
         self.faced_bet = 0
         self.folded_to_bet = 0
+        self.flops_seen = 0
         self.showdowns = 0
 
     def to_profile(self):
@@ -59,7 +61,7 @@ class _SeatCounters:
         )
 
         showdown = (self.showdowns + prior_w * d["showdown"]) / (
-            self.hands + prior_w
+            self.flops_seen + prior_w
         )
 
         return {
@@ -147,6 +149,7 @@ class OpponentModel:
 
         dealt_seats = set()
         folded_seats = set()
+        folded_preflop = set()
         vpip_this_hand = set()
         pfr_this_hand = set()
         three_bet_opp_this_hand = set()
@@ -215,6 +218,7 @@ class OpponentModel:
                         preflop_raises,
                         dealt_seats,
                         folded_seats,
+                        folded_preflop,
                         vpip_this_hand,
                         pfr_this_hand,
                         three_bet_opp_this_hand,
@@ -230,6 +234,7 @@ class OpponentModel:
                 preflop_raises,
                 dealt_seats,
                 folded_seats,
+                folded_preflop,
                 vpip_this_hand,
                 pfr_this_hand,
                 three_bet_opp_this_hand,
@@ -263,6 +268,8 @@ class OpponentModel:
                     shown_seats.add(entry)
                     dealt_seats.add(entry)
 
+        board = summary.get("board")
+        reached_flop = isinstance(board, (list, tuple)) and len(board) >= 3
         for seat in dealt_seats:
             c = self._ensure_seat(seat)
             if c is None:
@@ -276,8 +283,10 @@ class OpponentModel:
                 c.three_bet_opps += 1
             if seat in three_bet_this_hand:
                 c.three_bets += 1
-            if seat in shown_seats and seat not in folded_seats:
-                c.showdowns += 1
+            if reached_flop and seat not in folded_preflop:
+                c.flops_seen += 1
+                if seat in shown_seats and seat not in folded_seats:
+                    c.showdowns += 1
             self._profiles[seat] = c.to_profile()
 
     def _record_action(
@@ -289,6 +298,7 @@ class OpponentModel:
         preflop_raises,
         dealt_seats,
         folded_seats,
+        folded_preflop,
         vpip_this_hand,
         pfr_this_hand,
         three_bet_opp_this_hand,
@@ -327,21 +337,21 @@ class OpponentModel:
                     three_bet_this_hand.add(seat)
                 preflop_raises += 1
 
-        # Checks never count as facing a bet; postflop actions only count if a bet occurred on THIS street
-        if action != "check":
-            facing_bet_now = street_has_bet or (is_preflop and action in ("fold", "call"))
-            if facing_bet_now and action in ("fold", "call", "raise", "all_in", "allin"):
+        if not is_preflop:
+            if street_has_bet and action != "check":
                 c.faced_bet += 1
                 if action == "fold":
                     c.folded_to_bet += 1
+            if action == "call":
+                c.passive_actions += 1
+            elif action in _AGGRESSIVE_ACTIONS:
+                c.agg_actions += 1
+                street_has_bet = True
 
         if action == "fold":
             folded_seats.add(seat)
-        elif action == "call":
-            c.passive_actions += 1
-        elif action in _AGGRESSIVE_ACTIONS:
-            c.agg_actions += 1
-            street_has_bet = True
+            if is_preflop:
+                folded_preflop.add(seat)
 
         return street_has_bet, preflop_raises
 
