@@ -474,6 +474,11 @@ _OPEN_LIMP = 0.0    # share of hands (by value) that limp first in when not wort
 _OPEN_ADD = 0.75    # extra big blinds on every first-in raise
 _LIMP_CALL_W = 0.80  # width of the range of a seat that limped and then called a raise
 _3B_VAL = 1.0       # weight on the value a re-raise wins from limpers who also call it
+# Facing a 3-bet. Only the very top of a 3-betting range continues against a 4-bet, so how often
+# a 3-bettor folds follows from how wide he 3-bets: a seat that 3-bets 2% of hands never folds.
+_4B_CONT = 0.04     # share of all hands that continue against a 4-bet
+_REAL_IP = 1.0      # share of equity realised after the flop in position
+_REAL_OOP = 0.78    # share of equity realised after the flop out of position
 
 
 def _bucket(nb):
@@ -664,7 +669,7 @@ class PreflopBrain(object):
 
     def _real(self, h, ip, spr, n_opp, agg, deep):
         """Share of raw equity I expect to realise after the flop."""
-        r = (1.0 if ip else 0.86) + (0.05 if agg else 0.0)
+        r = (_REAL_IP if ip else _REAL_OOP) + (0.05 if agg else 0.0)
         d = spr / 8.0
         if d > 1.0:
             d = 1.0
@@ -1064,6 +1069,12 @@ class PreflopBrain(object):
                 pf_, pc_, pr_ = oA.probs("f3")
             elif level == 2:
                 pf_, pc_, pr_ = oA.probs("f4")
+                cont = _4B_CONT / xA if xA > _4B_CONT else 1.0
+                fold = 1.0 - cont
+                if fold < pf_:                    # only ever more cautious than the prior
+                    keep = pc_ + pr_
+                    scale = (1.0 - fold) / keep if keep > 1e-9 else 0.0
+                    pf_, pc_, pr_ = fold, pc_ * scale, pr_ * scale
             else:
                 pf_, pc_, pr_ = 0.30, 0.70, 0.0
             callers_money = 0
