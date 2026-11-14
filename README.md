@@ -1,6 +1,6 @@
 # Imperial AI Hackathon — team workspace
 
-Preparation for 14 November 2026. No application or technology stack has been selected yet.
+Team workspace for the 14 November 2026 Imperial AI Hackathon. The team is building a Python bot for the AlgoSoc Pokerbots competition.
 
 ## Read first
 
@@ -16,18 +16,20 @@ Choose your own tools. Team members share project contracts and the delivery pro
 
 Accept the collaborator invitation and clone the repository. Read the documents above, then use the GitHub Task Issue template to agree a task with the integration lead. A task has one owner, bounded paths and explicit acceptance steps. Push to its short branch and hand off via a PR; the lead integrates ready PRs serially.
 
-## Reproducible commands — UNCONFIGURED
+## Reproducible commands
 
 | Operation | Exact command / prerequisites |
 | --- | --- |
-| Install | TBD after stack and versions are chosen |
-| Run | TBD |
-| Check/build | TBD; must fail visibly on errors |
-| Core demo smoke test | TBD; include expected result |
+| Install | Python 3.9+ (platform runs 3.12); standard library only, no packages to install |
+| Run | `python3 imperial-ai-hack-pokerbots-kit/local_sim.py` (default 5 rounds of 1,000 hands) |
+| Check/build | `python3 imperial-ai-hack-pokerbots-kit/build.py` (checks static imports, enforces the 200 KB limit and verifies an isolated load before replacing `bot.py`) |
+| Core demo smoke test | `python3 imperial-ai-hack-pokerbots-kit/local_sim.py --rounds 1 --hands 1000 --seed 1` (0 timeouts, 0 errors, 0 bank out) |
 
-The skeleton task must replace these entries with tested commands and configure corresponding PR checks when appropriate. Until then, documentation validation is the only available validation; it does not establish build readiness. No placeholder workflow reports a fake green build.
+Build before running the smoke test so it covers the current sources. The generated file records a SHA-256 digest of the bundled sources so identical inputs rebuild to the same file across checkouts. Record the reviewed commit and artifact digest in the PR handoff.
 
-Once integrations are chosen, commit `.env.example` with variable names and dummy values only. Keep real credentials and local environment files untracked.
+Before asking for strategy PR review, run the [pre-PR self-test](imperial-ai-hack-pokerbots-kit/harness/README.md) and paste the result in your PR.
+
+Keep competition credentials and hand-history data tokens out of the repository.
 
 ## Enforcement status
 
