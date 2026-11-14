@@ -21,6 +21,7 @@ MODULES = (
     "preflop",
     "opponents",
     "postflop",
+    "exploits",
     "agent",
 )
 

@@ -1,6 +1,6 @@
 """Tournament Agent entrypoint integrating opponent model and strategy modules."""
 
-from . import common, postflop, preflop
+from . import common, exploits, postflop, preflop
 from .opponents import OpponentModel
 
 
@@ -24,7 +24,7 @@ class Agent:
             if state.get("street") == "preflop":
                 raw = preflop.decide(state, profiles)
             else:
-                raw = postflop.decide(state, profiles)
+                raw = exploits.adjust(state, profiles, postflop.decide(state, profiles))
             return common.safe_action(state, raw)
         except Exception:
             return common.safe_action(state, None)
