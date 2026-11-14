@@ -11,6 +11,7 @@ class OpponentModel:
     def __init__(self, num_players=6):
         self.seats = {s: self._default_seat() for s in range(num_players)}
 
+
     def _default_seat(self):
         return {
             "hands": 20,          # Prior weight (k=20)
