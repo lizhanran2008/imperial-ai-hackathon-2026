@@ -464,6 +464,16 @@ _PRFI = (0.14, 0.20, 0.27, 0.40, 0.42)          # prior open frequency: EP, MP, 
 _RFI_W = {1: 0.42, 2: 0.44, 3: 0.27, 4: 0.205, 5: 0.168, 6: 0.137, 7: 0.115}   # my baseline by players behind
 _LAM = 0.985                                    # forgetting factor for the response counters
 _AI_Q0 = 0.04                                   # prior: share of all hands a bot calls a 100bb shove with
+# Value play against loose-passive fields. A limp is the one stateless sign of a loose-passive
+# player, so these apply in limped pots and scale down when a limper's profile says he folds.
+_ISO_VAL = 0.50     # share of hands (by value) that raise over limpers
+_ISO_ADD = 4.0      # extra big blinds on the raise over limpers
+_LIMP_W = 0.0       # share of hands (by value) that call along behind limpers for one big blind
+_OPEN_VAL = 0.30    # share of hands (by value) that open-raise first in from any seat
+_OPEN_LIMP = 0.0    # share of hands (by value) that limp first in when not worth a raise
+_OPEN_ADD = 0.75    # extra big blinds on every first-in raise
+_LIMP_CALL_W = 0.80  # width of the range of a seat that limped and then called a raise
+_3B_VAL = 1.0       # weight on the value a re-raise wins from limpers who also call it
 
 
 def _bucket(nb):
@@ -684,11 +694,26 @@ class PreflopBrain(object):
         my_total = my_bet + stacks[me]
         opp = self.opp
         items = []
+        # Seats that are already all-in cannot fold: they always see a showdown for the main pot.
+        inv_l = 0.0
+        cap = 0
         for j, xj in cands:
+            if stacks[j] <= 0:
+                e = self._eq(0.0, xj)
+                inv_l += (1.0 - e) / (e if e > 0.02 else 0.02)
+                if bets[j] > cap:
+                    cap = bets[j]
+        if cap > my_total:
+            cap = my_total
+        for j, xj in cands:
+            if stacks[j] <= 0:
+                continue
             q = opp[j].ai_q()
             r = q if q < xj else xj
             p = r / xj if xj > 1e-9 else 1.0
             e = self._eq(0.0, r)
+            if inv_l > 0.0:
+                e = 1.0 / (1.0 + (1.0 - e) / (e if e > 0.02 else 0.02) + inv_l)
             eff = bets[j] + stacks[j]
             if eff > my_total:
                 eff = my_total
@@ -699,7 +724,22 @@ class PreflopBrain(object):
         for p, ev in items:
             total += none * p * ev
             none *= 1.0 - p
-        return total + none * pot
+        if inv_l <= 0.0:
+            return total + none * pot
+        # Everyone who could fold did. The main pot (every bet capped at the all-in amount) is
+        # still contested; chips above the cap that the folders left behind are won outright.
+        main = cap if my_total >= cap else my_total
+        side = 0
+        for k in range(len(bets)):
+            if k != me:
+                b = bets[k]
+                main += b if b < cap else cap
+                if b > cap:
+                    side += b - cap
+        if my_bet > cap:
+            side += my_bet - cap
+        add = cap - my_bet if cap > my_bet else 0
+        return total + none * (main / (1.0 + inv_l) + side - add)
 
     # ------------------------------------------------------------------ main entry
     def act(self, st):
@@ -791,16 +831,18 @@ class PreflopBrain(object):
             if ev_s > 1.25 * std + bb:
                 self.info["line"] = "value shove"
                 return {"action": "raise", "amount": st["max_raise_to"]}
-        if mid < w:
+        if mid < w or PM_VAL[h] < _OPEN_VAL:
             if nb == 1:
                 size = 3.0 if w < 0.7 else 2.5
             else:
                 size = 2.5 if w < 0.62 else 2.2
             if loose >= 0.9 and PM_VAL[h] < 0.25:         # callers behind: charge them with value hands
                 size += 0.5 * min(3.0, loose)
-            return self._raise(st, size * bb)
+            return self._raise(st, (size + _OPEN_ADD) * bb)
         if nb == 1 and X_SBLIMP and mid < 0.72 and opp[bbs].opt_raise() <= 0.35 and "call" in legal:
             self.info["line"] = "complete"
+            return {"action": "call"}
+        if PM_VAL[h] < _OPEN_LIMP and "call" in legal and st["to_call"] <= bb:
             return {"action": "call"}
         return self._passive(st, False)
 
@@ -824,9 +866,14 @@ class PreflopBrain(object):
                 s = (s + 1) % n
         pf = 1.0
         pf0 = 1.0
+        stick = 1.0
         for s in lim:
-            pf *= opp[s].fold("li")
+            f = opp[s].fold("li")
+            pf *= f
             pf0 *= _PRI["li"][0]
+            f = (1.0 - f) / (1.0 - _PRI["li"][0])       # 1 = sticks to a raise like a typical limper
+            if f < stick:
+                stick = f
         for s in behind:
             key = "bbe" if s == bbs else ("sb" if s == sbs else "ip")
             pf *= opp[s].fold(key)
@@ -864,9 +911,12 @@ class PreflopBrain(object):
                     if ev_s > 1.25 * std + bb:
                         self.info["line"] = "value shove"
                         return {"action": "raise", "amount": st["max_raise_to"]}
-            if score < w:
+            value = nl > 0 and PM_VAL[h] < _ISO_VAL * stick
+            if score < w or value:
                 if pf < 0.5 * pf0 and PM_VAL[h] < 0.15:     # sticky limpers: bigger for value
                     size += 1.0
+                if value:
+                    size += _ISO_ADD
                 return self._raise(st, size * bb)
         if tc <= 0:
             return {"action": "check"} if "check" in legal else {"action": "call"}
@@ -880,6 +930,8 @@ class PreflopBrain(object):
             else:
                 if ((nb <= 3 or nl >= 2) and (SPEC[h] or PM_RFI[h] < 0.30)) or PM_RFI[h] < 0.20:
                     return {"action": "call"}
+            if nl > 0 and tc <= bb and PM_VAL[h] < _LIMP_W * stick:
+                return {"action": "call"}
         return self._passive(st, False)
 
     # ------------------------------------------------------------------ facing a raise
@@ -936,8 +988,8 @@ class PreflopBrain(object):
                 return 0.15 * ow, 0.75 * ow
         key = self._key(j, raises[0][0], button, n, sbs, bbs)
         f, c, r = o.probs(key)
-        if j in limpers and c < 0.25:
-            c = 0.25
+        if j in limpers and c < _LIMP_CALL_W:
+            c = _LIMP_CALL_W
         if c < 0.05:
             c = 0.05
         return r, r + c
@@ -1052,6 +1104,13 @@ class PreflopBrain(object):
                 ev_cont = e_r * (pot - my_bet - bets[A] + 2 * eff) - (eff - my_bet)
                 ev_rr = ev_cont if ev_cont > -a else -a
                 ev_raise = p_fold * pot + rest * (wc * ev_called + (1.0 - wc) * ev_rr)
+                if _3B_VAL > 0.0 and limpers:
+                    val = 0.0                     # limpers who stay in pay off a better hand
+                    for j in limpers:
+                        if j != me and j != A and not folded[j] and stacks[j] > 0:
+                            ej = self._eq(0.0, _LIMP_CALL_W)
+                            val += (1.0 - opp[j].fold("li")) * (2.0 * ej - 1.0) * (t - bets[j])
+                    ev_raise += _3B_VAL * val
                 target = t
             if mx >= my_total:
                 cands = [(A, xA)] + committed + [(j, 0.5 if j in limpers else 1.0) for j in pending]
