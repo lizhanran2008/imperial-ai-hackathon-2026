@@ -4,8 +4,9 @@ The strategies live in src/postflop_<name>.py, each with its own
 decide(state, profiles). This file picks the one the bot plays; the Agent
 calls postflop.decide and nothing else. To switch, change SELECTED.
 
-Every strategy listed here is bundled into bot.py by build.py, selected or
-not, so each new file also needs adding to MODULES there.
+build.py does not know about the strategy files, so build this layout with
+`python build_postflop.py`, which bundles every src/postflop_*.py, selected
+or not.
 """
 from . import postflop_champion, postflop_ranges
 
