@@ -464,6 +464,10 @@ _PRFI = (0.14, 0.20, 0.27, 0.40, 0.42)          # prior open frequency: EP, MP, 
 _RFI_W = {1: 0.42, 2: 0.44, 3: 0.27, 4: 0.205, 5: 0.168, 6: 0.137, 7: 0.115}   # my baseline by players behind
 _LAM = 0.985                                    # forgetting factor for the response counters
 _AI_Q0 = 0.04                                   # prior: share of all hands a bot calls a 100bb shove with
+# All-ins over a re-raise with no pair and no ace need an estimated edge of at least
+# _JAM_CLEAR big blinds over the next best action (see PreflopBrain._jam_ok).
+_JAM_NEEDS_EDGE = True
+_JAM_CLEAR = 5.0
 # Value play against loose-passive fields. A limp is the one stateless sign of a loose-passive
 # player, so these apply in limped pots and scale down when a limper's profile says he folds.
 _ISO_VAL = 0.50     # share of hands (by value) that raise over limpers
@@ -1011,6 +1015,20 @@ class PreflopBrain(object):
             c = 0.05
         return r, r + c
 
+    def _jam_ok(self, h, level, edge):
+        """Whether an all-in over a re-raise may go ahead. `edge` is its estimated gain, in chips,
+        over the next best action.
+
+        In live rounds 28-38 these all-ins paid well with pairs and aces, but hands with neither
+        (JTo, KQo, QTo, K8s) were called nine times out of thirteen and won once: the estimate
+        expects more folds than a re-raiser gives, and such a hand is dominated when called. Seats
+        that had folded to earlier all-ins were among the callers, so a folding record does not
+        excuse it. Without a pair or an ace the edge has to be clear."""
+        if not _JAM_NEEDS_EDGE or level < 2 or edge >= _JAM_CLEAR * self.bb:
+            return True
+        name = cls_name(h)
+        return name[0] == name[1] or name[0] == "A"
+
     def _vs_raise(self, st, h, me, n, button, sbs, bbs, raises, limpers):
         bb = self.bb
         opp = self.opp
@@ -1151,7 +1169,7 @@ class PreflopBrain(object):
             if ev_raise > best_ev + 0.25 * bb and ev_raise > need:
                 best = "raise"
                 best_ev = ev_raise
-        if ev_shove > best_ev + 0.75 * bb and ev_shove > bb:
+        if ev_shove > best_ev + 0.75 * bb and ev_shove > bb and self._jam_ok(h, level, ev_shove - best_ev):
             best = "shove"
             best_ev = ev_shove
         self.info = {"spot": "vs_raise", "hand": cls_name(h), "level": level, "villain_range": xA,
