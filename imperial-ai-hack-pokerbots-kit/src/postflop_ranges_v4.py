@@ -94,6 +94,9 @@ PARAMS = {
     "dead_window": 40, "dead_facing": 10,
     # switches for the calibration changes
     "use_size_buckets": True, "use_seat_width": True, "use_raise_risk": True,
+    "use_stackoff_guard": True, "big_bet_min": 400, "big_bet_seff": 0.88,
+    "shove_mult": 2.5, "shove_min": 300, "shove_seff": 0.96, "raise_commit_seff": 0.90,
+    "commit_min": 500, "commit_bet": 300, "commit_seff": 0.60,
     "use_runover_guard": True, "use_dead_bot": True, "use_bluffs": True,
     # Skip the calculation for a hand with seff under shortcut_seff against two
     # or more opponents: check, or fold to a bet of at least shortcut_price of
@@ -104,7 +107,7 @@ PARAMS = {
 }
 
 # Counters for the promotion gate. Read them after a run; nothing resets them.
-STATS = {"decisions": 0, "fallback_trials": 0, "fallback_error": 0, "fallback_no_table": 0,
+STATS = {"decisions": 0, "fallback_trials": 0, "fallback_error": 0, "fallback_no_table": 0, "stackoff_folds": 0,
          "exceptions": {}, "trials": 0, "skipped_updates": 0, "slowest_ms": 0.0, "shortcuts": 0,
          "mixed_bluffs": 0, "observed_hands": 0, "shown_bets": 0, "shown_bluffs": 0, "observe_errors": 0}
 
@@ -1420,7 +1423,25 @@ def choose_no_bet(state, T, tb, opps, profs, eq, strong, closing, in_position, s
     return {"action": "raise", "amount": target}
 
 
-def choose_facing_bet(state, T, tb, opps, profs, eq, bettor, behind, in_position, streets_left, combo_draw):
+def stackoff_floor(to_call, pot, combo_draw=False):
+    """Lowest hand-strength percentile allowed to continue against a big bet, or 0.0.
+
+    The equity estimate assumes the bettor's range is as wide as its earlier
+    actions allow; players who bet the pot or more turned out far stronger than
+    that in live rounds 28-38, most of all those moving all-in for many times the
+    pot. So against those sizes the hand itself must be near the top of what is
+    possible on the board, whatever the estimate says. `pot` includes the bet."""
+    p = PARAMS
+    before = pot - to_call
+    if to_call >= p["shove_min"] and to_call >= p["shove_mult"] * before:
+        return p["shove_seff"]
+    if to_call >= p["big_bet_min"] and to_call >= before and not combo_draw:
+        return p["big_bet_seff"]
+    return 0.0
+
+
+def choose_facing_bet(state, T, tb, opps, profs, eq, bettor, behind, in_position, streets_left, combo_draw,
+                      seff=None, draw=False):
     p = PARAMS
     legal = state["legal_actions"]
     pot = state["pot"]
@@ -1440,7 +1461,18 @@ def choose_facing_bet(state, T, tb, opps, profs, eq, bettor, behind, in_position
                            min(1.0, to_call / float(max(stack, 1))), structural, scale)
     ev_call = eq * (pot + to_call) - to_call
     action = {"action": "call"} if eq >= need else {"action": "fold"}
-    if "raise" in legal:
+    guard = p["use_stackoff_guard"] and seff is not None
+    weak = guard and seff < stackoff_floor(to_call, pot, combo_draw)
+    if guard and not weak and not draw and to_call >= p["commit_bet"] and seff < p["commit_seff"]:
+        # A real bet that takes our chips in this hand past commit_min, with a hand in the
+        # bottom part of what is possible and no draw: ace-high call-downs in re-raised pots.
+        start = 100 * (state.get("big_blind") or 20)
+        weak = max(0, start - stack) + to_call >= p["commit_min"]
+    if weak:
+        if action["action"] == "call":
+            STATS["stackoff_folds"] += 1
+        action = {"action": "fold"}
+    if "raise" in legal and not weak:
         high = max(bets)
         target = max(state["min_raise_to"], min(state["max_raise_to"], int(p["raise_mult"] * high)))
         cost = target - my_bet
@@ -1454,6 +1486,8 @@ def choose_facing_bet(state, T, tb, opps, profs, eq, bettor, behind, in_position
         adds = [max(0, target - bets[j]) for j in opps]
         ev, eq_called, _ = ev_bet(T, pot, cost, adds, conts)
         ahead = eq_called is not None and eq_called >= 0.5
+        if guard and cost >= p["commit_frac"] * stack and seff < p["raise_commit_seff"]:
+            ahead = False                       # no stack-committing raise without a strong hand
         if cost < p["commit_frac"] * stack or ahead:
             alt = max(ev_call, 0.0)
             if eq_called is not None and eq_called >= p["raise_eq"] and eq >= need \
@@ -1482,6 +1516,8 @@ def _fallback(state, seff, opponents):
         price = to_call / float(state["pot"] + to_call)
         col = 1 if price <= 0.22 else 2 if price <= 0.30 else 3
     code = _FALLBACK[row][col]
+    if PARAMS["use_stackoff_guard"] and to_call > 0 and seff < stackoff_floor(to_call, state["pot"]):
+        code = "x"
     if code in "br" and "raise" in legal:
         return {"action": "raise", "amount": _raise_to(state, 0.66)}
     if code != "x" and "call" in legal:
@@ -1627,7 +1663,10 @@ def _decide(state, profiles, out):
     behind = sum(1 for j in opps if j != bettor and bets[j] < high and stacks[j] > 0)
     combo = street != "river" and seff >= p["floor_combo"][0 if street == "flop" else 1] \
         and _is_combo_draw(hero_ids, ids)
-    return choose_facing_bet(state, T, tb, opps, profs, eq, bettor, behind, in_position, streets_left, combo)
+    out["eq"] = eq
+    draw = street != "river" and _is_draw(hero_ids, ids)
+    return choose_facing_bet(state, T, tb, opps, profs, eq, bettor, behind, in_position, streets_left, combo,
+                             seff, draw)
 
 
 def _is_draw(hero_ids, ids):
