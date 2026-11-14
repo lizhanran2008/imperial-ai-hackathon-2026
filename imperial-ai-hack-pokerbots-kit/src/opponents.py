@@ -9,6 +9,11 @@ _AGGRESSIVE_ACTIONS = {"bet", "raise", "all_in", "allin"}
 _VOLUNTARY_PREFLOP_ACTIONS = {"call", "bet", "raise", "all_in", "allin"}
 _DECISION_ACTIONS = {"fold", "check", "call", "bet", "raise", "all_in", "allin"}
 
+_CJ_PRIOR = 0.35     # prior share of preflop all-ins a seat calls after raising itself
+_CJ_PRIOR_W = 3.0    # weight of that prior, in observations
+_CJ_MIN = 2          # observations needed before the frequency is reported
+_JAM_BB = 40         # a preflop raise to at least this many big blinds counts as all-in
+
 
 class _SeatCounters:
     __slots__ = (
@@ -23,6 +28,8 @@ class _SeatCounters:
         "folded_to_bet",
         "flops_seen",
         "showdowns",
+        "jam_faced",
+        "jam_called",
     )
 
     def __init__(self):
@@ -37,6 +44,8 @@ class _SeatCounters:
         self.folded_to_bet = 0
         self.flops_seen = 0
         self.showdowns = 0
+        self.jam_faced = 0
+        self.jam_called = 0
 
     def to_profile(self):
         if self.hands == 0:
@@ -64,7 +73,15 @@ class _SeatCounters:
             self.flops_seen + prior_w
         )
 
-        return {
+        out = {}
+        # Optional key: how often this seat, having raised preflop, calls an all-in.
+        if self.jam_faced >= _CJ_MIN:
+            out["call_jam"] = round(
+                (self.jam_called + _CJ_PRIOR_W * _CJ_PRIOR)
+                / (self.jam_faced + _CJ_PRIOR_W),
+                4,
+            )
+        out.update({
             "hands": self.hands,
             "vpip": round(vpip, 4),
             "pfr": round(pfr, 4),
@@ -73,7 +90,8 @@ class _SeatCounters:
             "fold_to_bet": round(fold_to_bet, 4),
             "showdown": round(showdown, 4),
             "style": self._classify_style(vpip, pfr, aggression, three_bet),
-        }
+        })
+        return out
 
     def _classify_style(self, vpip, pfr, aggression, three_bet):
         if self.hands < 5:
@@ -93,6 +111,39 @@ class _SeatCounters:
 
 class OpponentModel:
     """Per-round opponent tracker matching start(info), observe(summary), profiles()."""
+
+    def _record_jam_calls(self, history):
+        """Count how each seat that had raised preflop answers a later preflop all-in."""
+        bb = 0
+        raisers = set()
+        jam_by = None
+        for item in history:
+            seat, action, street = self._extract_item(item)
+            if street is not None and street not in _PREFLOP_STREETS:
+                break
+            try:
+                amount = float(item.get("amount") or 0) if isinstance(item, dict) else 0.0
+            except (TypeError, ValueError):
+                amount = 0.0
+            if action in _BLIND_ACTIONS:
+                bb = max(bb, amount)
+                continue
+            if not isinstance(seat, int) or action not in _DECISION_ACTIONS:
+                continue
+            if jam_by is not None and seat != jam_by and seat in raisers:
+                c = self._ensure_seat(seat)
+                if c is not None and action != "check":
+                    c.jam_faced += 1
+                    if action != "fold":
+                        c.jam_called += 1
+                raisers.discard(seat)
+                if action in _AGGRESSIVE_ACTIONS:
+                    continue
+            if action in _AGGRESSIVE_ACTIONS:
+                raisers.add(seat)
+                if action in ("all_in", "allin") or (bb > 0 and amount >= _JAM_BB * bb):
+                    jam_by = seat
+                    raisers.discard(seat)
 
     def __init__(self):
         self._num_players = 8
@@ -174,6 +225,10 @@ class OpponentModel:
                         dealt_seats.add(idx)
 
         history = summary.get("history") or summary.get("actions") or []
+        try:
+            self._record_jam_calls(history)
+        except Exception:
+            pass
         current_street = "preflop"
         preflop_raises = 0
         street_has_bet = False
