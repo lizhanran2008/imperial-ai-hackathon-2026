@@ -133,11 +133,36 @@ def _render_bot(sources, digest):
             "    setattr(_pkg, _mod_name, _mod)",
             "    exec(compile(_mod_src, f'src/{_mod_name}.py', 'exec'), _mod.__dict__)",
             "",
-            "Agent = _sys.modules[f'{_PKG_NAME}.agent'].Agent",
+            "",
+            "class Agent:",
+            "    def __init__(self):",
+            "        self._agent = _pkg.agent.Agent()",
+            "",
+            "    def on_table_start(self, info):",
+            "        return self._agent.on_table_start(info)",
+            "",
+            "    def act(self, state):",
+            "        return self._agent.act(state)",
+            "",
+            "    def on_hand_end(self, summary):",
+            "        return self._agent.on_hand_end(summary)",
             "",
         ]
     )
     return "\n".join(lines)
+
+
+def _verify_entrypoint(rendered):
+    """Require the same visible class and decision method as the starter kit."""
+    tree = ast.parse(rendered, filename="bot.py")
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "Agent":
+            if any(
+                isinstance(method, ast.FunctionDef) and method.name == "act"
+                for method in node.body
+            ):
+                return
+    raise SystemExit("Generated bot.py must define a top-level class Agent with an act method.")
 
 
 def _verify_loads(bot_path):
@@ -187,6 +212,7 @@ def main():
         raise SystemExit(
             f"Generated bot.py is {len(rendered)} bytes. Limit: {MAX_BOT_BYTES} bytes."
         )
+    _verify_entrypoint(rendered)
 
     with tempfile.TemporaryDirectory(prefix=".pokerbot-build-", dir=HERE) as temp_dir:
         candidate = os.path.join(temp_dir, "bot.py")
