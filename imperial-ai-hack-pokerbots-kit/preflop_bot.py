@@ -1,0 +1,1637 @@
+"""AlgoSoc Pokerbots - adaptive preflop module (single file, standard library only).
+
+WHAT THIS FILE IS
+    PreflopBrain      the preflop module: every preflop decision plus the per-seat opponent model.
+    FallbackPostflop  a deliberately simple placeholder so the file can be uploaded as-is.
+                      Swap in the team's real postflop module (see Agent.act).
+    Agent             the class the platform imports. Wraps both with a crash-proof safety net.
+
+HOW THE PREFLOP MODULE DECIDES
+    * Tables (generated offline, embedded below): a 169x169 heads-up all-in equity matrix with
+      card removal, and three hand orderings (opening priority, raw value, "what bots raise").
+    * First in: raise-or-fold from a solver-style ordering. The width starts at a standard chart
+      for the number of players left to act and is then scaled by the measured chance that
+      everyone behind folds - up to any two cards against players who fold too much.
+    * Facing a raise / 3-bet / 4-bet / shove: one EV model. The raiser's range is the top X% of
+      hands, where X is how often *that seat* takes that action (population prior until there is
+      data, widened when his showdowns show weaker hands). Call EV = equity x realisation x pot
+      - price. Raise EV = fold equity + EV when called + EV when re-raised. Shove EV uses how
+      loosely each seat calls all-ins. The best positive option is played.
+    * Opponent model: every seat's open / limp / fold-to-steal / fold-to-3-bet / 4-bet / shove /
+      call-shove frequencies, bet sizes and showdown hands, with slow forgetting and a
+      "dead bot" detector (a bot that timed out or crashed folds everything).
+
+INTERFACE FOR THE POSTFLOP OWNER
+    brain = PreflopBrain(); brain.on_table_start(info)
+    brain.act(state)            -> action dict for a preflop state
+    brain.on_hand_end(summary)  -> updates the opponent model (call it every hand)
+    brain.info                  -> dict describing the last preflop decision (spot, EVs, ranges)
+    brain.opp[seat]             -> per-seat statistics (see _Opp)
+"""
+import base64
+import math
+import zlib
+from bisect import bisect_right
+
+DEBUG = False      # True re-raises exceptions (tests only). Leave False for the tournament.
+
+# Feature switches. Leave on; they exist so each exploit can be A/B tested.
+X_STATS = True     # use per-opponent statistics (False: population priors only)
+X_SHOVE = True     # shove for value when the players left call all-ins too loosely
+X_SBLIMP = True    # complete the small blind with playable hands against a passive big blind
+
+RANKS = "23456789TJQKA"
+_RI = {c: i for i, c in enumerate(RANKS)}
+
+# ---- generated tables (169x169 equity matrix, card-removal weights, hand orderings) ----
+_BLOB = (
+    "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"
+)
+ORD_RFI = [168, 154, 140, 126, 112, 98, 167, 84, 155, 166, 142, 165, 70, 164, 153, 163, 152, 162, 141, 151, 139, 159, 138, 158, 125, 111, 129, 56, 161, 150, 160, 157, 156, 116, 42, 128, 149, 137, 124, 97, 115, 28, 127, 148, 147, 110, 83, 103, 90, 114, 14, 136, 146, 113, 145, 123, 0, 96, 69, 55, 41, 77, 51, 102, 64, 38, 25, 89, 101, 12, 76, 135, 144, 134, 143, 100, 133, 122, 99, 132, 109, 131, 121, 120, 130, 108, 85, 95, 82, 81, 68, 67, 54, 40, 27, 63, 88, 50, 37, 87, 75, 24, 62, 86, 11, 119, 118, 117, 107, 106, 72, 94, 71, 105, 104, 93, 80, 57, 43, 53, 39, 26, 13, 74, 49, 36, 73, 23, 61, 48, 10, 60, 35, 59, 22, 58, 92, 9, 47, 91, 34, 46, 21, 45, 79, 44, 66, 78, 8, 33, 20, 32, 29, 31, 65, 30, 52, 7, 19, 16, 18, 17, 6, 15, 3, 5, 4, 2, 1]
+ORD_VAL = [168, 154, 140, 126, 112, 167, 155, 98, 166, 84, 142, 165, 70, 129, 164, 56, 153, 116, 163, 152, 42, 162, 141, 151, 139, 161, 28, 103, 128, 159, 138, 160, 150, 158, 90, 125, 14, 115, 157, 127, 149, 156, 137, 77, 148, 124, 147, 0, 51, 111, 114, 102, 64, 136, 146, 38, 113, 123, 145, 25, 110, 97, 144, 89, 135, 101, 12, 134, 143, 76, 122, 100, 83, 96, 133, 109, 63, 99, 132, 88, 50, 121, 131, 87, 82, 69, 95, 108, 37, 120, 86, 85, 130, 119, 24, 75, 62, 118, 55, 11, 74, 68, 81, 94, 71, 117, 72, 107, 49, 73, 106, 41, 36, 105, 54, 61, 67, 80, 23, 93, 58, 57, 104, 59, 60, 92, 48, 10, 40, 35, 91, 53, 27, 66, 43, 79, 22, 78, 44, 45, 46, 47, 9, 39, 34, 29, 52, 26, 21, 30, 65, 31, 32, 13, 33, 8, 20, 16, 7, 17, 15, 18, 19, 6, 3, 4, 2, 5, 1]
+ORD_V = [168, 154, 140, 126, 112, 167, 98, 155, 84, 166, 142, 165, 70, 164, 153, 163, 152, 129, 162, 56, 141, 151, 139, 116, 42, 161, 159, 138, 158, 125, 160, 150, 128, 28, 157, 103, 156, 115, 111, 149, 137, 90, 127, 124, 14, 148, 147, 114, 77, 0, 97, 136, 51, 146, 110, 113, 102, 123, 145, 64, 38, 83, 25, 89, 96, 101, 144, 135, 12, 76, 134, 143, 69, 100, 122, 133, 109, 99, 132, 55, 121, 131, 63, 108, 88, 82, 95, 120, 50, 41, 130, 85, 87, 37, 68, 81, 86, 24, 75, 119, 62, 118, 11, 54, 67, 117, 94, 71, 107, 72, 74, 106, 40, 105, 27, 49, 80, 93, 73, 36, 104, 57, 61, 23, 53, 43, 48, 58, 60, 59, 10, 35, 92, 39, 26, 22, 91, 13, 66, 79, 47, 9, 46, 45, 44, 78, 34, 21, 29, 52, 33, 8, 32, 30, 65, 31, 20, 7, 16, 17, 19, 18, 15, 6, 3, 4, 5, 2, 1]
+EQ_RANDOM = [0.5033, 0.3231, 0.3321, 0.3428, 0.3409, 0.3458, 0.3682, 0.391, 0.4167, 0.4435, 0.473, 0.5051, 0.5493, 0.3597, 0.5369, 0.3515, 0.3626, 0.3608, 0.366, 0.3749, 0.4001, 0.426, 0.4528, 0.4822, 0.5143, 0.5584, 0.3683, 0.3865, 0.5702, 0.3816, 0.3801, 0.3854, 0.3944, 0.4067, 0.4351, 0.4619, 0.4913, 0.5233, 0.5673, 0.3786, 0.3969, 0.4145, 0.6032, 0.3994, 0.4049, 0.4142, 0.4267, 0.4425, 0.4718, 0.5013, 0.5331, 0.5771, 0.3768, 0.3953, 0.4132, 0.4314, 0.6329, 0.4232, 0.4325, 0.445, 0.4609, 0.4783, 0.5102, 0.5423, 0.5768, 0.3816, 0.4005, 0.4184, 0.4367, 0.4535, 0.6622, 0.4504, 0.463, 0.4791, 0.4969, 0.5177, 0.5519, 0.5883, 0.4026, 0.4087, 0.427, 0.4456, 0.4625, 0.4795, 0.6917, 0.4811, 0.4971, 0.5148, 0.5359, 0.5602, 0.5988, 0.4242, 0.4327, 0.4386, 0.4571, 0.4741, 0.4912, 0.5081, 0.7206, 0.5154, 0.5324, 0.5537, 0.5782, 0.6077, 0.4484, 0.457, 0.4653, 0.4721, 0.4893, 0.5063, 0.5234, 0.5402, 0.7502, 0.5525, 0.5728, 0.5974, 0.6272, 0.4738, 0.4823, 0.4907, 0.5, 0.5061, 0.5234, 0.5402, 0.5565, 0.5752, 0.7747, 0.5813, 0.6057, 0.6356, 0.5018, 0.5102, 0.5186, 0.5277, 0.536, 0.543, 0.5601, 0.5768, 0.5947, 0.6026, 0.7992, 0.6146, 0.6443, 0.5321, 0.5406, 0.5488, 0.558, 0.5665, 0.5753, 0.5832, 0.5998, 0.6178, 0.6259, 0.634, 0.8239, 0.6531, 0.5738, 0.5822, 0.5903, 0.5992, 0.5991, 0.6098, 0.6194, 0.6278, 0.646, 0.6541, 0.6621, 0.6704, 0.852]
+
+
+
+def _load():
+    raw = zlib.decompress(base64.b64decode(_BLOB))
+    eq = [[raw[i * 169 + j] / 250.0 for j in range(169)] for i in range(169)]
+    off = 169 * 169
+    wt = [list(raw[off + i * 169: off + (i + 1) * 169]) for i in range(169)]
+    return eq, wt
+
+
+EQ, WT = _load()                 # EQ[i][j]: equity of class i all-in vs class j; WT[i][j]: combos of j left
+NCOMB = [6 if i // 13 == i % 13 else (4 if i // 13 > i % 13 else 12) for i in range(169)]
+
+
+def _mid(order):
+    mid = [0.0] * 169
+    cum = [0.0]
+    acc = 0
+    for i in order:
+        mid[i] = (acc + NCOMB[i] * 0.5) / 1326.0
+        acc += NCOMB[i]
+        cum.append(acc / 1326.0)
+    return mid, cum
+
+
+PM_RFI, _c0 = _mid(ORD_RFI)      # percentile (0 = best) in opening-priority order
+PM_VAL, _c1 = _mid(ORD_VAL)      # percentile in raw value order (equity vs strong and random ranges)
+PM_V, CUM_V = _mid(ORD_V)        # percentile in the order used to model opponents' ranges
+PM_EQ, _c2 = _mid(sorted(range(169), key=lambda i: -EQ_RANDOM[i]))
+# playability: hands that solvers open earlier than their raw equity suggests realise more equity
+PLAY = [max(-0.12, min(0.15, 0.30 * (PM_EQ[i] - PM_RFI[i]))) for i in range(169)]
+
+
+def _spec(i):
+    a, b = divmod(i, 13)
+    if a == b:
+        return True
+    if a > b:                    # suited: aces, broadways, connectors and one-gappers
+        return a == 12 or b >= 8 or (a - b <= 2 and b >= 2)
+    return False
+
+
+def _impl(i):
+    a, b = divmod(i, 13)
+    if a == b:
+        return 0.14 if a <= 7 else (0.08 if a <= 9 else 0.0)
+    if a > b:
+        return 0.05 if _spec(i) else 0.02
+    return 0.0
+
+
+SPEC = [_spec(i) for i in range(169)]    # speculative hands worth a cheap multiway flop
+IMPL = [_impl(i) for i in range(169)]    # implied-odds bonus when calling small and deep
+
+
+def cls_index(c1, c2):
+    """Two card strings -> hand class 0..168 (pairs r*14, suited hi*13+lo, offsuit lo*13+hi)."""
+    a = _RI[c1[0]]
+    b = _RI[c2[0]]
+    if a == b:
+        return a * 14
+    if c1[1] == c2[1]:
+        return a * 13 + b if a > b else b * 13 + a
+    return b * 13 + a if a > b else a * 13 + b
+
+
+def cls_name(i):
+    a, b = divmod(i, 13)
+    if a == b:
+        return RANKS[a] * 2
+    return RANKS[a] + RANKS[b] + "s" if a > b else RANKS[b] + RANKS[a] + "o"
+
+
+# ------------------------------------------------------------------ population priors
+# (fold, call, raise) of a typical bot in each context, and how many observations the prior is worth.
+_PRI = {
+    "ip": (0.86, 0.07, 0.07),    # not in the blinds, facing an open
+    "sb": (0.82, 0.07, 0.11),    # small blind facing an open
+    "bbl": (0.56, 0.33, 0.11),   # big blind facing a late-position open (CO, BTN, SB)
+    "bbe": (0.70, 0.23, 0.07),   # big blind facing an earlier open
+    "f3": (0.58, 0.27, 0.15),    # opener facing a 3-bet
+    "f4": (0.50, 0.20, 0.30),    # 3-bettor facing a 4-bet
+    "li": (0.45, 0.50, 0.05),    # limper facing a raise
+}
+_KPRI = {"ip": 10.0, "sb": 8.0, "bbl": 8.0, "bbe": 8.0, "f3": 6.0, "f4": 5.0, "li": 6.0}
+_PRFI = (0.14, 0.20, 0.27, 0.40, 0.42)          # prior open frequency: EP, MP, CO, BTN, SB
+_RFI_W = {1: 0.42, 2: 0.44, 3: 0.27, 4: 0.205, 5: 0.168, 6: 0.137, 7: 0.115}   # my baseline by players behind
+_LAM = 0.985                                    # forgetting factor for the response counters
+_AI_Q0 = 0.04                                   # prior: share of all hands a bot calls a 100bb shove with
+
+
+def _bucket(nb):
+    if nb >= 5:
+        return 0
+    if nb == 4:
+        return 1
+    if nb == 3:
+        return 2
+    if nb == 2:
+        return 3
+    return 4
+
+
+class _Opp(object):
+    """Everything observed about one seat this round."""
+    __slots__ = ("hands", "vpip", "pfr", "quiet", "rfi_n", "rfi_r", "rfi_l", "c", "streak", "opt_n", "opt_r",
+                 "ai_n", "ai_sum", "shf_n", "shf_s", "sho_n", "sho_s", "sizes", "sd", "pa", "pb", "fb_n", "fb_f")
+
+    def __init__(self):
+        self.hands = 0
+        self.vpip = 0
+        self.pfr = 0
+        self.quiet = 0                       # hands since this seat last put chips in voluntarily
+        self.rfi_n = [0.0] * 5               # first-in opportunities by position bucket
+        self.rfi_r = [0.0] * 5               # ... raised
+        self.rfi_l = [0.0] * 5               # ... limped
+        self.c = {k: [0.0, 0.0, 0.0, 0.0] for k in _PRI}     # context -> [n, folds, calls, raises]
+        self.streak = {k: 0 for k in _PRI}   # consecutive folds per context (dead-bot detector)
+        self.opt_n = 0.0                     # big blind with the option in a limped pot
+        self.opt_r = 0.0
+        self.ai_n = 0.0                      # faced an all-in
+        self.ai_sum = 0.0                    # ... called, weighted by how wide his range was
+        self.shf_n = 0.0                     # could shove first / over limpers
+        self.shf_s = 0.0
+        self.sho_n = 0.0                     # could shove over a raise
+        self.sho_s = 0.0
+        self.sizes = []                      # recent open sizes in big blinds
+        self.sd = ([], [], [])               # showdown percentiles after: open-raise, re-raise, shove
+        self.pa = 0.0                        # postflop actions
+        self.pb = 0.0                        # postflop bets and raises
+        self.fb_n = 0.0                      # postflop: faced a bet
+        self.fb_f = 0.0                      # ... folded
+
+    def note(self, key, kind):               # kind: 1 fold, 2 call, 3 raise
+        a = self.c[key]
+        a[0] = a[0] * _LAM + 1.0
+        a[1] *= _LAM
+        a[2] *= _LAM
+        a[3] *= _LAM
+        a[kind] += 1.0
+        if kind == 1:
+            self.streak[key] += 1
+        else:
+            self.streak[key] = 0
+
+    def probs(self, key):
+        """(fold, call, raise) in a context: observations blended with the population prior."""
+        p = _PRI[key]
+        if not X_STATS:
+            return p
+        a = self.c[key]
+        k = _KPRI[key]
+        d = a[0] + k
+        f = (a[1] + p[0] * k) / d
+        c = (a[2] + p[1] * k) / d
+        r = (a[3] + p[2] * k) / d
+        s = self.streak[key]
+        lim = 0.97 if (s >= 20 or self.quiet >= 40) else (0.93 if s >= 12 else 0.0)
+        if lim > f:                           # behaves like a dead bot: folds to everything
+            rest = (1.0 - lim) / max(1e-9, c + r)
+            f, c, r = lim, c * rest, r * rest
+        return f, c, r
+
+    def fold(self, key):
+        return self.probs(key)[0]
+
+    def open_w(self, b):
+        """Estimated first-in raising frequency from position bucket b."""
+        if not X_STATS:
+            return _PRFI[b]
+        rn = self.rfi_n
+        rr = self.rfi_r
+        exp = 0.0
+        obs = 0.0
+        for i in range(5):
+            exp += rn[i] * _PRFI[i]
+            obs += rr[i]
+        m = (obs + 1.5) / (exp + 1.5)         # how loose he is overall compared with the prior
+        if m < 0.25:
+            m = 0.25
+        pb = _PRFI[b] * m
+        if pb > 0.95:
+            pb = 0.95
+        est = (rr[b] + 5.0 * pb) / (rn[b] + 5.0)
+        if self.quiet >= 40 and est > 0.02:
+            est = 0.02
+        return est
+
+    def threebet_w(self, key):
+        return self.probs(key)[2]
+
+    def call_w(self, key):
+        return self.probs(key)[1]
+
+    def shove_first_w(self):
+        if not X_STATS:
+            return 0.02
+        return max(0.012, (self.shf_s + 0.4) / (self.shf_n + 25.0))
+
+    def shove_over_w(self):
+        if not X_STATS:
+            return 0.02
+        return max(0.012, (self.sho_s + 0.4) / (self.sho_n + 20.0))
+
+    def ai_q(self):
+        """Share of all hands this seat is willing to call an all-in with."""
+        if not X_STATS:
+            return _AI_Q0
+        if self.quiet >= 40:
+            return 0.004
+        return (self.ai_sum + _AI_Q0 * 10.0) / (self.ai_n + 10.0)
+
+    def opt_raise(self):
+        return (self.opt_r + 0.15 * 6.0) / (self.opt_n + 6.0)
+
+    def med_size(self):
+        s = self.sizes
+        if len(s) < 3:
+            return 0.0
+        return sorted(s)[len(s) // 2]
+
+    def loosen(self, x, which):
+        """Widen a raising range when his showdown hands are weaker than his frequency implies."""
+        if not X_STATS:
+            return x
+        sd = self.sd[which]
+        k = len(sd)
+        if k >= 3:
+            m2 = 2.0 * sum(sd) / k            # a top-x range has mean percentile x/2
+            if m2 > x:
+                x += (m2 - x) * k / (k + 3.0)
+        return x
+
+    def post_fold(self):
+        return (self.fb_f + 0.45 * 6.0) / (self.fb_n + 6.0)
+
+    def post_agg(self):
+        return (self.pb + 0.30 * 8.0) / (self.pa + 8.0)
+
+
+class PreflopBrain(object):
+    def __init__(self):
+        self.n = 8
+        self.me = 0
+        self.bb = 20
+        self.sb = 10
+        self.stack0 = 2000
+        self.opp = [_Opp() for _ in range(10)]
+        self.info = {}
+        self._h = -1
+        self._cw = None
+        self._ce = None
+
+    # ------------------------------------------------------------------ hooks
+    def on_table_start(self, info):
+        self.n = int(info.get("num_players", 8) or 8)
+        self.me = int(info.get("seat", 0) or 0)
+        self.bb = int(info.get("big_blind", 20) or 20)
+        self.sb = int(info.get("small_blind", 10) or 10)
+        self.stack0 = int(info.get("starting_stack", 2000) or 2000)
+        self.opp = [_Opp() for _ in range(max(self.n, 2))]
+
+    # ------------------------------------------------------------------ geometry
+    @staticmethod
+    def _blinds(button, n):
+        if n == 2:
+            return button, (button + 1) % n
+        return (button + 1) % n, (button + 2) % n
+
+    @staticmethod
+    def _nb(seat, button, n):
+        """Players still to act behind `seat` when the pot is unopened (BB = 0)."""
+        if n == 2:
+            return 1 if seat == button else 0
+        p = (seat - button) % n
+        if p == 0:
+            return 2
+        if p == 1:
+            return 1
+        if p == 2:
+            return 0
+        return n - p + 2
+
+    def _key(self, s, opener, button, n, sbs, bbs):
+        """Context of seat s when he faces an open from `opener`."""
+        if s == bbs:
+            return "bbl" if self._nb(opener, button, n) <= 3 else "bbe"
+        if s == sbs:
+            return "sb"
+        return "ip"
+
+    @staticmethod
+    def _ip(me, other, button, n):
+        """True if I act after `other` on later streets."""
+        return (me - button - 1) % n > (other - button - 1) % n
+
+    # ------------------------------------------------------------------ equity vs ranges
+    def _prep(self, h):
+        if self._h == h and self._cw is not None:
+            return
+        row_e = EQ[h]
+        row_w = WT[h]
+        cw = [0.0] * 170
+        ce = [0.0] * 170
+        aw = 0.0
+        ae = 0.0
+        k = 1
+        for j in ORD_V:
+            w = row_w[j]
+            aw += w
+            ae += w * row_e[j]
+            cw[k] = aw
+            ce[k] = ae
+            k += 1
+        self._h = h
+        self._cw = cw
+        self._ce = ce
+
+    def _eq(self, lo, hi):
+        """My equity against the slice [lo, hi] (fractions of all hands, best first) of the villain order."""
+        if lo < 0.0:
+            lo = 0.0
+        if hi > 1.0:
+            hi = 1.0
+        if hi - lo < 0.005:
+            hi = lo + 0.005
+            if hi > 1.0:
+                hi = 1.0
+                lo = 0.995
+        cw = self._cw
+        ce = self._ce
+        cum = CUM_V
+        k = bisect_right(cum, lo) - 1
+        if k > 168:
+            k = 168
+        f = (lo - cum[k]) / (cum[k + 1] - cum[k])
+        wl = cw[k] + f * (cw[k + 1] - cw[k])
+        el = ce[k] + f * (ce[k + 1] - ce[k])
+        k = bisect_right(cum, hi) - 1
+        if k > 168:
+            k = 168
+        f = (hi - cum[k]) / (cum[k + 1] - cum[k])
+        w = cw[k] + f * (cw[k + 1] - cw[k]) - wl
+        if w <= 1e-9:
+            return 0.5
+        return (ce[k] + f * (ce[k + 1] - ce[k]) - el) / w
+
+    def _real(self, h, ip, spr, n_opp, agg, deep):
+        """Share of raw equity I expect to realise after the flop."""
+        r = (1.0 if ip else 0.86) + (0.05 if agg else 0.0)
+        d = spr / 8.0
+        if d > 1.0:
+            d = 1.0
+        p = PLAY[h]
+        r += p * d
+        if PM_VAL[h] < 0.05:
+            r += 0.05
+        if deep and spr >= 8.0:
+            r += IMPL[h]
+        if n_opp > 1:
+            r -= (0.03 if p <= 0.0 else 0.01) * (n_opp - 1)
+        if spr < 1.0:
+            r = 1.0 - (1.0 - r) * (spr if spr > 0.0 else 0.0)
+        if r < 0.5:
+            r = 0.5
+        elif r > 1.2:
+            r = 1.2
+        return r
+
+    def _ev_shove(self, st, h, me, cands):
+        """EV (chips, relative to folding now) of moving all in. cands: [(seat, range width now)]."""
+        self._prep(h)
+        pot = st["pot"]
+        bets = st["bets"]
+        stacks = st["stacks"]
+        my_bet = bets[me]
+        my_total = my_bet + stacks[me]
+        opp = self.opp
+        items = []
+        for j, xj in cands:
+            q = opp[j].ai_q()
+            r = q if q < xj else xj
+            p = r / xj if xj > 1e-9 else 1.0
+            e = self._eq(0.0, r)
+            eff = bets[j] + stacks[j]
+            if eff > my_total:
+                eff = my_total
+            items.append((p, e * (pot - my_bet - bets[j] + 2 * eff) - (eff - my_bet)))
+        items.sort(reverse=True)
+        none = 1.0
+        total = 0.0
+        for p, ev in items:
+            total += none * p * ev
+            none *= 1.0 - p
+        return total + none * pot
+
+    # ------------------------------------------------------------------ main entry
+    def act(self, st):
+        stacks = st["stacks"]
+        n = len(stacks)
+        me = st["seat"]
+        button = st["button"]
+        if len(self.opp) < n:
+            self.opp.extend(_Opp() for _ in range(n - len(self.opp)))
+        self.n = n
+        self.me = me
+        self.bb = st["big_blind"]
+        hole = st["hole_cards"]
+        h = cls_index(hole[0], hole[1])
+        sbs, bbs = self._blinds(button, n)
+        raises = []
+        limpers = []
+        for e in st["history"]:
+            a = e["action"]
+            if a == "raise":
+                raises.append((e["seat"], e["amount"]))
+            elif a == "call" and not raises:
+                limpers.append(e["seat"])
+        if raises:
+            return self._vs_raise(st, h, me, n, button, sbs, bbs, raises, limpers)
+        if limpers or st["to_call"] <= 0:
+            return self._limped(st, h, me, n, button, sbs, bbs, limpers)
+        return self._rfi(st, h, me, n, button, sbs, bbs)
+
+    @staticmethod
+    def _raise(st, amount):
+        mn = st["min_raise_to"]
+        mx = st["max_raise_to"]
+        amount = int(amount)
+        if amount < mn:
+            amount = mn
+        if amount > mx:
+            amount = mx
+        return {"action": "raise", "amount": amount}
+
+    @staticmethod
+    def _passive(st, want_call):
+        legal = st["legal_actions"]
+        if "check" in legal:
+            return {"action": "check"}
+        if want_call and "call" in legal:
+            return {"action": "call"}
+        return {"action": "fold"}
+
+    # ------------------------------------------------------------------ first in
+    def _rfi(self, st, h, me, n, button, sbs, bbs):
+        bb = self.bb
+        opp = self.opp
+        legal = st["legal_actions"]
+        nb = self._nb(me, button, n)
+        behind = []
+        s = (me + 1) % n
+        while s != me:
+            behind.append(s)
+            if s == bbs:
+                break
+            s = (s + 1) % n
+        late = nb <= 3
+        pf = 1.0
+        pf0 = 1.0
+        loose = 0.0
+        for s in behind:
+            key = ("bbl" if late else "bbe") if s == bbs else ("sb" if s == sbs else "ip")
+            f, c, r = opp[s].probs(key)
+            pf *= f
+            pf0 *= _PRI[key][0]
+            loose += c
+        base = _RFI_W.get(nb, 0.10)
+        atc = 0.70 if nb == 1 else 0.66 + 0.01 * max(0, nb - 2)
+        if pf > pf0:
+            x = (pf - pf0) / max(1e-6, atc - pf0)
+            if x > 1.0:
+                x = 1.0
+            w = base + (1.0 - base) * x ** 1.3
+        else:
+            w = base * max(0.72, pf / pf0)
+        mid = PM_RFI[h]
+        can_raise = "raise" in legal and st.get("max_raise_to") is not None
+        self.info = {"spot": "first_in", "hand": cls_name(h), "behind": nb, "width": w, "fold_all": pf}
+        if not can_raise:
+            return self._passive(st, mid < 0.15)
+        my_total = st["bets"][me] + st["stacks"][me]
+        if X_SHOVE and st["max_raise_to"] >= my_total and PM_VAL[h] < 0.30:
+            ev_s = self._ev_shove(st, h, me, [(s, 1.0) for s in behind])
+            std = (9.5 * math.exp(-60.0 * PM_VAL[h]) + 0.4) * bb
+            if ev_s > 1.25 * std + bb:
+                self.info["line"] = "value shove"
+                return {"action": "raise", "amount": st["max_raise_to"]}
+        if mid < w:
+            if nb == 1:
+                size = 3.0 if w < 0.7 else 2.5
+            else:
+                size = 2.5 if w < 0.62 else 2.2
+            if loose >= 0.9 and PM_VAL[h] < 0.25:         # callers behind: charge them with value hands
+                size += 0.5 * min(3.0, loose)
+            return self._raise(st, size * bb)
+        if nb == 1 and X_SBLIMP and mid < 0.72 and opp[bbs].opt_raise() <= 0.35 and "call" in legal:
+            self.info["line"] = "complete"
+            return {"action": "call"}
+        return self._passive(st, False)
+
+    # ------------------------------------------------------------------ limped pot
+    def _limped(self, st, h, me, n, button, sbs, bbs, limpers):
+        bb = self.bb
+        opp = self.opp
+        legal = st["legal_actions"]
+        tc = st["to_call"]
+        lim = [s for s in limpers if s != me]
+        nl = len(lim)
+        is_bb = me == bbs
+        is_sb = me == sbs
+        behind = []
+        if not is_bb:
+            s = (me + 1) % n
+            while s != me:
+                behind.append(s)
+                if s == bbs:
+                    break
+                s = (s + 1) % n
+        pf = 1.0
+        pf0 = 1.0
+        for s in lim:
+            pf *= opp[s].fold("li")
+            pf0 *= _PRI["li"][0]
+        for s in behind:
+            key = "bbe" if s == bbs else ("sb" if s == sbs else "ip")
+            pf *= opp[s].fold(key)
+            pf0 *= _PRI[key][0]
+        nb = self._nb(me, button, n)
+        heads_up_ip = is_bb and nl == 1 and lim[0] == sbs
+        if is_bb:
+            base = 0.36 if heads_up_ip else (0.14 if nl == 1 else 0.11)
+            size = 3.5 if heads_up_ip else 4.0 + nl
+        elif is_sb:
+            base = 0.15 if nl == 1 else 0.11
+            size = 4.0 + nl
+        else:
+            base = _RFI_W.get(nb, 0.10) * (0.85 if nl == 1 else (0.68 if nl == 2 else 0.55))
+            size = 3.0 + nl
+        potbb = st["pot"] / float(bb)
+        atc = 0.8 * size / (potbb + 0.8 * size) + 0.12
+        if pf > pf0:
+            x = (pf - pf0) / max(1e-6, atc - pf0)
+            if x > 1.0:
+                x = 1.0
+            w = base + (1.0 - base) * x ** 1.3
+        else:
+            w = base * max(0.70, pf / pf0)
+        score = PM_RFI[h] if nl <= 1 else 0.5 * (PM_RFI[h] + PM_VAL[h])
+        can_raise = "raise" in legal and st.get("max_raise_to") is not None
+        self.info = {"spot": "limped", "hand": cls_name(h), "limpers": nl, "width": w, "fold_all": pf}
+        if can_raise:
+            my_total = st["bets"][me] + st["stacks"][me]
+            if X_SHOVE and st["max_raise_to"] >= my_total and PM_VAL[h] < 0.30:
+                cands = [(s, 0.5) for s in lim] + [(s, 1.0) for s in behind]
+                if cands:
+                    ev_s = self._ev_shove(st, h, me, cands)
+                    std = (9.5 * math.exp(-60.0 * PM_VAL[h]) + 0.4) * bb + 0.5 * st["pot"]
+                    if ev_s > 1.25 * std + bb:
+                        self.info["line"] = "value shove"
+                        return {"action": "raise", "amount": st["max_raise_to"]}
+            if score < w:
+                if pf < 0.5 * pf0 and PM_VAL[h] < 0.15:     # sticky limpers: bigger for value
+                    size += 1.0
+                return self._raise(st, size * bb)
+        if tc <= 0:
+            return {"action": "check"} if "check" in legal else {"action": "call"}
+        if "call" in legal:
+            if is_sb:
+                lim_w = 0.58 + 0.05 * min(nl, 3)
+                if opp[bbs].opt_raise() > 0.40:
+                    lim_w -= 0.20
+                if PM_RFI[h] < lim_w:
+                    return {"action": "call"}
+            else:
+                if ((nb <= 3 or nl >= 2) and (SPEC[h] or PM_RFI[h] < 0.30)) or PM_RFI[h] < 0.20:
+                    return {"action": "call"}
+        return self._passive(st, False)
+
+    # ------------------------------------------------------------------ facing a raise
+    def _agg_width(self, st, A, level, raises, limpers, n, button, sbs, bbs):
+        """Estimated width (share of all hands) of the last raiser's range."""
+        o = self.opp[A]
+        amt = raises[-1][1]
+        allin = st["stacks"][A] <= 0 or amt >= 0.45 * self.stack0
+        which = 2 if allin else (0 if level == 1 else 1)
+        if level == 1:
+            if allin:
+                x = o.shove_first_w()
+            else:
+                x = o.open_w(_bucket(self._nb(A, button, n)))
+                if limpers:
+                    x *= 0.9
+                sz = amt / float(self.bb)
+                med = o.med_size()
+                if med > 0.0:
+                    if sz >= 1.6 * med and sz >= 4.5:
+                        x *= 0.6                    # much bigger than his usual open: stronger
+                elif sz >= 6.0:
+                    x *= 0.65
+        elif level == 2:
+            x = o.threebet_w(self._key(A, raises[0][0], button, n, sbs, bbs))
+            if allin:
+                s = o.shove_over_w()
+                if s < x:
+                    x = s
+        elif level == 3:
+            if A == raises[0][0]:
+                x = o.open_w(_bucket(self._nb(A, button, n))) * o.probs("f3")[2]
+            else:
+                x = 0.02
+            if allin:
+                s = o.shove_over_w()
+                if s < x:
+                    x = s
+        else:
+            x = 0.016
+        x = o.loosen(x, which)
+        if x < 0.010:
+            x = 0.010
+        elif x > 1.0:
+            x = 1.0
+        return x
+
+    def _caller_slice(self, j, raises, limpers, n, button, sbs, bbs):
+        """Range slice of a seat that has called the current bet without being the last raiser."""
+        o = self.opp[j]
+        for s, _a in raises:
+            if s == j:                               # raised earlier, then just called a re-raise
+                ow = o.open_w(_bucket(self._nb(j, button, n)))
+                return 0.15 * ow, 0.75 * ow
+        key = self._key(j, raises[0][0], button, n, sbs, bbs)
+        f, c, r = o.probs(key)
+        if j in limpers and c < 0.25:
+            c = 0.25
+        if c < 0.05:
+            c = 0.05
+        return r, r + c
+
+    def _vs_raise(self, st, h, me, n, button, sbs, bbs, raises, limpers):
+        bb = self.bb
+        opp = self.opp
+        legal = st["legal_actions"]
+        pot = st["pot"]
+        tc = st["to_call"]
+        bets = st["bets"]
+        stacks = st["stacks"]
+        folded = st["folded"]
+        level = len(raises)
+        A = raises[-1][0]
+        if A == me or tc <= 0:
+            return {"action": "check"} if "check" in legal else self._passive(st, True)
+        cur = max(bets)
+        my_bet = bets[me]
+        my_stack = stacks[me]
+        my_total = my_bet + my_stack
+        self._prep(h)
+
+        xA = self._agg_width(st, A, level, raises, limpers, n, button, sbs, bbs)
+        eA = self._eq(0.0, xA)
+        inv = (1.0 - eA) / (eA if eA > 0.02 else 0.02)
+        n_in = 1
+        committed = []
+        pending = []
+        for j in range(n):
+            if j == me or j == A or folded[j]:
+                continue
+            if bets[j] >= cur or stacks[j] <= 0:
+                lo, hi = self._caller_slice(j, raises, limpers, n, button, sbs, bbs)
+                e = self._eq(lo, hi)
+                inv += (1.0 - e) / (e if e > 0.02 else 0.02)
+                n_in += 1
+                committed.append((j, hi))
+            else:
+                pending.append(j)
+        pwin = 1.0 / (1.0 + inv)
+
+        # ---- call
+        allin_A = stacks[A] <= 0
+        pot_c = pot + tc
+        rem = my_stack - tc
+        ip = self._ip(me, A, button, n)
+        a_total = bets[A] + stacks[A]
+        if rem <= 0:
+            rc = 1.0
+        else:
+            spr = rem / float(pot_c)
+            deep = tc <= 0.07 * (my_total if my_total < a_total else a_total)
+            rc = self._real(h, ip, spr, n_in, False, deep)
+            if pending:
+                rc *= 1.0 - 0.035 * (len(pending) if len(pending) < 3 else 3)
+            if allin_A and rc < 0.97:
+                rc = 0.97
+        ev_call = pwin * rc * pot_c - tc
+
+        # ---- raise
+        ev_raise = -1e18
+        ev_shove = -1e18
+        target = None
+        e_c = 0.0
+        can_raise = "raise" in legal and st.get("max_raise_to") is not None and not allin_A
+        if can_raise:
+            mn = st["min_raise_to"]
+            mx = st["max_raise_to"]
+            oA = opp[A]
+            if level == 1:
+                pf_, pc_, pr_ = oA.probs("f3")
+            elif level == 2:
+                pf_, pc_, pr_ = oA.probs("f4")
+            else:
+                pf_, pc_, pr_ = 0.30, 0.70, 0.0
+            callers_money = 0
+            for j, _hi in committed:
+                callers_money += bets[j]
+            if level == 1:
+                t = (3.2 if ip else 4.2) * cur + callers_money
+                floor = (6.5 if ip else 8.5) * bb
+                if t < floor:
+                    t = floor
+            elif level == 2:
+                t = (2.3 if ip else 2.6) * cur + callers_money
+            else:
+                t = mx
+            if t >= 0.36 * my_total:
+                t = mx
+            t = int(t)
+            if t < mn:
+                t = mn
+            if t > mx:
+                t = mx
+            if t < my_total:
+                a = t - my_bet
+                others = 0.80 ** len(committed) * 0.95 ** len(pending)
+                p_fold = pf_ * others
+                rest = 1.0 - p_fold
+                s_cr = pc_ + pr_
+                wc = pc_ / s_cr if s_cr > 1e-9 else 1.0
+                e_c = self._eq(pr_ * xA, (pr_ + pc_) * xA)
+                pot_called = pot + a + (t - bets[A])
+                rr = self._real(h, ip, (my_total - t) / float(pot_called), 1, True, False)
+                ev_called = e_c * rr * pot_called - a
+                x_r = pr_ * xA
+                if x_r < 0.006:
+                    x_r = 0.006
+                e_r = self._eq(0.0, x_r)
+                eff = my_total if my_total < a_total else a_total
+                ev_cont = e_r * (pot - my_bet - bets[A] + 2 * eff) - (eff - my_bet)
+                ev_rr = ev_cont if ev_cont > -a else -a
+                ev_raise = p_fold * pot + rest * (wc * ev_called + (1.0 - wc) * ev_rr)
+                target = t
+            if mx >= my_total:
+                cands = [(A, xA)] + committed + [(j, 0.5 if j in limpers else 1.0) for j in pending]
+                ev_shove = self._ev_shove(st, h, me, cands)
+
+        best = "fold"
+        best_ev = 0.0
+        if ev_call > 0.10 * bb and "call" in legal:
+            best = "call"
+            best_ev = ev_call
+        if target is not None:
+            need = 0.30 * bb
+            if e_c < 0.42 and PM_VAL[h] > 0.06:       # a bluff: ask for a clearer edge
+                need = 0.60 * bb
+            if ev_raise > best_ev + 0.25 * bb and ev_raise > need:
+                best = "raise"
+                best_ev = ev_raise
+        if ev_shove > best_ev + 0.75 * bb and ev_shove > bb:
+            best = "shove"
+            best_ev = ev_shove
+        self.info = {"spot": "vs_raise", "hand": cls_name(h), "level": level, "villain_range": xA,
+                     "equity": pwin, "ev_call": ev_call, "ev_raise": ev_raise, "ev_shove": ev_shove, "line": best}
+        if best == "call":
+            return {"action": "call"}
+        if best == "raise":
+            return {"action": "raise", "amount": target}
+        if best == "shove":
+            return {"action": "raise", "amount": st["max_raise_to"]}
+        return self._passive(st, False)
+
+    # ------------------------------------------------------------------ learning
+    def on_hand_end(self, summary):
+        hist = summary.get("history") or []
+        if not hist:
+            return
+        n = self.n
+        me = self.me
+        opp = self.opp
+        bbf = float(self.bb)
+        k = 0
+        sbs = bbs = -1
+        if hist[0]["action"] == "small_blind":
+            sbs = hist[0]["seat"]
+            k = 1
+        if len(hist) > k and hist[k]["action"] == "big_blind":
+            bbs = hist[k]["seat"]
+            k += 1
+        if bbs < 0:
+            return
+        if sbs < 0:
+            sbs = (bbs - 1) % n
+        button = sbs if n == 2 else (sbs - 1) % n
+        thr = 0.45 * self.stack0
+        nr = 0
+        raisers = []
+        limp = set()
+        vol = [0] * n            # 0 nothing voluntary, 1 called, 2 raised
+        lvl = [0] * n            # highest raise level made
+        shv = [False] * n
+        cur_shove = False
+        street = "preflop"
+        bet_open = False
+        for e in hist[k:]:
+            s = e["seat"]
+            if s >= n:
+                continue
+            a = e["action"]
+            stt = e["street"]
+            o = opp[s]
+            if stt != "preflop":
+                if stt != street:
+                    street = stt
+                    bet_open = False
+                if s != me:
+                    o.pa += 1.0
+                    if a == "raise":
+                        o.pb += 1.0
+                    if bet_open:
+                        o.fb_n += 1.0
+                        if a == "fold":
+                            o.fb_f += 1.0
+                if a == "raise":
+                    bet_open = True
+                continue
+            is_raise = a == "raise"
+            is_call = a == "call"
+            is_fold = a == "fold"
+            amt = e.get("amount") or 0
+            if s != me:
+                if nr == 0:
+                    if s == bbs:
+                        o.opt_n += 1.0
+                        if is_raise:
+                            o.opt_r += 1.0
+                    elif is_raise or is_call or is_fold:
+                        b = _bucket(self._nb(s, button, n))
+                        o.rfi_n[b] += 1.0
+                        if is_raise:
+                            o.rfi_r[b] += 1.0
+                            if amt < thr:
+                                o.sizes.append(amt / bbf)
+                                if len(o.sizes) > 12:
+                                    del o.sizes[0]
+                        elif is_call:
+                            o.rfi_l[b] += 1.0
+                    o.shf_n += 1.0
+                    if is_raise and amt >= thr:
+                        o.shf_s += 1.0
+                elif is_raise or is_call or is_fold:
+                    kind = 3 if is_raise else (2 if is_call else 1)
+                    key = None
+                    xcur = 1.0
+                    if vol[s] == 2:
+                        if nr == 2 and s == raisers[0]:
+                            key = "f3"
+                            xcur = o.open_w(_bucket(self._nb(s, button, n)))
+                        elif nr == 3 and len(raisers) > 1 and s == raisers[1]:
+                            key = "f4"
+                            xcur = o.threebet_w("ip")
+                        else:
+                            xcur = 0.05
+                    elif s in limp:
+                        key = "li"
+                        xcur = 0.5
+                    elif vol[s] == 1:
+                        xcur = 0.15
+                    elif nr == 1:
+                        key = self._key(s, raisers[0], button, n, sbs, bbs)
+                    if key is not None:
+                        o.note(key, kind)
+                    o.sho_n += 1.0
+                    if is_raise and amt >= thr:
+                        o.sho_s += 1.0
+                    if cur_shove:
+                        o.ai_n += 1.0
+                        if not is_fold:
+                            o.ai_sum += xcur
+            if is_raise:
+                nr += 1
+                raisers.append(s)
+                vol[s] = 2
+                lvl[s] = nr
+                cur_shove = amt >= thr
+                if cur_shove:
+                    shv[s] = True
+            elif is_call:
+                if nr == 0:
+                    limp.add(s)
+                if vol[s] == 0:
+                    vol[s] = 1
+        for j in range(n):
+            if j == me:
+                continue
+            o = opp[j]
+            o.hands += 1
+            if vol[j]:
+                o.vpip += 1
+                o.quiet = 0
+                if vol[j] == 2:
+                    o.pfr += 1
+            else:
+                o.quiet += 1
+        shown = summary.get("shown") or {}
+        for key, cards in shown.items():
+            try:
+                j = int(key)
+            except (TypeError, ValueError):
+                continue
+            if j == me or j >= n or j < 0 or vol[j] != 2 or not cards or len(cards) < 2:
+                continue
+            lst = opp[j].sd[2 if shv[j] else (0 if lvl[j] <= 1 else 1)]
+            lst.append(PM_V[cls_index(cards[0], cards[1])])
+            if len(lst) > 24:
+                del lst[0]
+
+
+# ====================================================================== placeholder postflop
+def _straight_high(mask):
+    m = (mask << 1) | (1 if mask & (1 << 12) else 0)
+    for top in range(13, 3, -1):
+        if (m >> (top - 4)) & 31 == 31:
+            return top - 1
+    return -1
+
+
+def _post_strength(hole, board):
+    """(made-hand strength 0..1, outs). Coarse on purpose: this is a placeholder."""
+    r1 = _RI[hole[0][0]]
+    r2 = _RI[hole[1][0]]
+    s1 = hole[0][1]
+    s2 = hole[1][1]
+    hi, lo = (r1, r2) if r1 >= r2 else (r2, r1)
+    br = [_RI[c[0]] for c in board]
+    bs = [c[1] for c in board]
+    nbd = len(br)
+    cnt = [0] * 13
+    mask_b = 0
+    for r in br:
+        cnt[r] += 1
+        mask_b |= 1 << r
+    bset = sorted(set(br), reverse=True)
+    mx = max(cnt)
+    bpair = mx >= 2
+    btrips = mx >= 3
+    sc = {}
+    for s in bs:
+        sc[s] = sc.get(s, 0) + 1
+    bflush = max(sc.values())
+
+    flush = 0.0
+    fd = False
+    for s, c in sc.items():
+        mine = (1 if s1 == s else 0) + (1 if s2 == s else 0)
+        if not mine:
+            continue
+        if c + mine >= 5:
+            best = max(r for r, ss in ((r1, s1), (r2, s2)) if ss == s)
+            onb = set(br[i] for i in range(nbd) if bs[i] == s)
+            higher = sum(1 for r in range(best + 1, 13) if r not in onb)
+            flush = 0.97 if higher == 0 else (0.90 if higher <= 2 else 0.82)
+            if c >= 4 and higher > 0:
+                flush -= 0.10
+        elif c + mine == 4 and nbd < 5:
+            fd = True
+
+    mask_all = mask_b | (1 << r1) | (1 << r2)
+    st_all = _straight_high(mask_all)
+    st_b = _straight_high(mask_b)
+    straight = 0.0
+    if st_all >= 0 and st_all > st_b:
+        straight = 0.88
+        if nbd >= 4:
+            for r in range(13):                   # a one-card straight on a four-straight board is weaker
+                if not (mask_b >> r) & 1 and _straight_high(mask_b | (1 << r)) >= 0:
+                    straight = 0.80
+                    break
+
+    if hi == lo:
+        c = cnt[hi]
+        if c >= 2:
+            made = 0.99
+        elif c == 1:
+            made = 0.96 if bpair else 0.93
+        elif btrips:
+            made = 0.88
+        elif hi > bset[0]:
+            made = 0.80 if hi >= 10 else 0.76
+        else:
+            above = sum(1 for r in bset if r > hi)
+            made = 0.58 if above == 1 else (0.46 if above == 2 else 0.38)
+            if bpair:
+                made -= 0.03
+    else:
+        ch = cnt[hi]
+        cl = cnt[lo]
+        if ch == 3 or cl == 3:
+            made = 0.99
+        elif (ch == 2 and cl >= 1) or (cl == 2 and ch >= 1):
+            made = 0.96
+        elif ch == 2 or cl == 2:
+            kick = lo if ch == 2 else hi
+            made = 0.88 if kick >= 9 else 0.84
+        elif ch == 1 and cl == 1:
+            made = 0.80 if bpair else 0.86
+        elif ch == 1 or cl == 1:
+            if btrips:
+                made = 0.90
+            else:
+                pr = hi if ch == 1 else lo
+                kick = lo if ch == 1 else hi
+                above = sum(1 for r in bset if r > pr)
+                if above == 0:
+                    made = 0.74 if kick >= 10 else (0.68 if kick >= 7 else 0.63)
+                elif above == 1:
+                    made = 0.52 if kick >= 10 else 0.48
+                else:
+                    made = 0.40
+                if bpair:
+                    made -= 0.04
+        else:
+            made = 0.30 if hi == 12 else (0.24 if hi == 11 else 0.16)
+
+    if made < 0.97 and not flush:
+        if bflush >= 4:
+            made *= 0.72
+        elif bflush == 3:
+            made *= 0.93
+    s = made
+    if straight > s:
+        s = straight
+        if bflush >= 4:
+            s *= 0.75
+        elif bflush == 3:
+            s *= 0.93
+    if flush > s:
+        s = flush
+        if bpair and s < 0.97:
+            s -= 0.04
+
+    outs = 0
+    if nbd < 5 and s < 0.80:
+        if fd:
+            outs += 9
+        if straight == 0.0:
+            base_b = 0
+            cnt_all = 0
+            for r in range(13):
+                if not (mask_all >> r) & 1:
+                    if _straight_high(mask_all | (1 << r)) >= 0:
+                        cnt_all += 1
+                    if not (mask_b >> r) & 1 and _straight_high(mask_b | (1 << r)) >= 0:
+                        base_b += 1
+            extra = cnt_all - base_b
+            if extra > 0:
+                outs += 4 * (extra if extra < 2 else 2)
+        if s < 0.35:
+            if hi > bset[0]:
+                outs += 2
+            if lo > bset[0]:
+                outs += 2
+        if outs > 15:
+            outs = 15
+    return s, outs
+
+
+class FallbackPostflop(object):
+    """Simple pot-odds postflop so the bot is playable. Replace with the team's postflop module."""
+
+    def __init__(self, brain):
+        self.brain = brain
+
+    @staticmethod
+    def _bet(st, frac):
+        me = st["seat"]
+        to = max(st["bets"]) + int(frac * st["pot"])
+        mn = st["min_raise_to"]
+        mx = st["max_raise_to"]
+        if to < mn:
+            to = mn
+        if to > mx or to >= 0.6 * (st["bets"][me] + st["stacks"][me]):
+            to = mx
+        return {"action": "raise", "amount": int(to)}
+
+    def act(self, st):
+        legal = st["legal_actions"]
+        tc = st["to_call"]
+        pot = st["pot"]
+        me = st["seat"]
+        folded = st["folded"]
+        n = len(folded)
+        street = st["street"]
+        opps = [j for j in range(n) if j != me and not folded[j]]
+        k = len(opps) if opps else 1
+        s, outs = _post_strength(st["hole_cards"], st["board"])
+        left = 2 if street == "flop" else (1 if street == "turn" else 0)
+        pre_agg = -1
+        bettor = -1
+        for e in st["history"]:
+            if e["action"] == "raise":
+                if e["street"] == "preflop":
+                    pre_agg = e["seat"]
+                elif e["street"] == street:
+                    bettor = e["seat"]
+        opp = self.brain.opp
+        can_raise = "raise" in legal and st.get("max_raise_to") is not None
+        fold_est = 0.45
+        if opps:
+            fold_est = sum(opp[j].post_fold() for j in opps if j < len(opp)) / float(len(opps))
+        if tc <= 0:
+            if not can_raise:
+                return {"action": "check"}
+            thr = 0.62 + 0.04 * (k - 1) + (0.02 if street == "river" else 0.0)
+            if fold_est < 0.30:
+                thr -= 0.04                       # they do not fold: bet thinner for value
+            if s >= thr:
+                frac = 0.75 if s >= 0.85 else 0.62
+                if fold_est < 0.30:
+                    frac += 0.15
+                return self._bet(st, frac)
+            if left and outs >= 8 and k <= 2 and fold_est >= 0.35:
+                return self._bet(st, 0.5)
+            if pre_agg == me and street == "flop" and k == 1 and fold_est >= 0.42:
+                if (st.get("hand_number", 0) * 7 + _RI[st["hole_cards"][0][0]]) % 10 < 7:
+                    return self._bet(st, 0.4)
+            if s >= 0.50 and left and k == 1 and fold_est >= 0.55:
+                return self._bet(st, 0.4)
+            return {"action": "check"}
+        po = tc / float(pot + tc)
+        if s >= 0.93:
+            eqv = 0.92
+        elif s >= 0.84:
+            eqv = 0.80
+        elif s >= 0.72:
+            eqv = 0.64
+        elif s >= 0.62:
+            eqv = 0.50
+        elif s >= 0.50:
+            eqv = 0.38
+        elif s >= 0.40:
+            eqv = 0.28
+        else:
+            eqv = 0.12
+        eqv -= 0.05 * (k - 1)
+        if street == "river":
+            eqv -= 0.04
+        if (st.get("raises_this_street") or 1) >= 2:
+            eqv -= 0.15
+        before = pot - tc
+        if before > 0 and tc > 1.2 * before:
+            eqv -= 0.06
+        if 0 <= bettor < len(opp):
+            ag = opp[bettor].post_agg()
+            if ag >= 0.5:
+                eqv += 0.10
+            elif ag <= 0.15:
+                eqv -= 0.07
+        if eqv < 0.02:
+            eqv = 0.02
+        draw = outs * (0.021 * left + (0.012 if left == 2 else 0.0))
+        total = eqv + (1.0 - eqv) * draw
+        if can_raise and s >= 0.90 and (street != "river" or s >= 0.93):
+            to = max(st["bets"]) + int(0.8 * (pot + tc))
+            mn = st["min_raise_to"]
+            mx = st["max_raise_to"]
+            if to < mn:
+                to = mn
+            if to > mx or to >= 0.6 * (st["bets"][me] + st["stacks"][me]):
+                to = mx
+            return {"action": "raise", "amount": int(to)}
+        if total >= po + 0.04 and "call" in legal:
+            return {"action": "call"}
+        return {"action": "fold"}
+
+
+# ====================================================================== the bot
+def _legalise(d, st):
+    """Never return anything the engine would turn into a fold by accident."""
+    legal = st.get("legal_actions") or []
+    act = (d or {}).get("action")
+    if act == "all_in":
+        act = "raise"
+        d = {"action": "raise", "amount": st.get("max_raise_to")}
+    if act == "raise":
+        mn = st.get("min_raise_to")
+        mx = st.get("max_raise_to")
+        if "raise" in legal and mn is not None and mx is not None:
+            try:
+                amt = int(d.get("amount"))
+            except (TypeError, ValueError):
+                amt = mn
+            return {"action": "raise", "amount": max(mn, min(mx, amt))}
+        act = "call"
+    if act == "call":
+        if "call" in legal:
+            return {"action": "call"}
+        act = "check"
+    if "check" in legal:                     # check and fold both collapse to a free check when possible
+        return {"action": "check"}
+    if act == "check" and "call" in legal and st.get("to_call", 1) <= 0:
+        return {"action": "call"}
+    return {"action": "fold"}
+
+
+class Agent:
+    def __init__(self):
+        self.pre = PreflopBrain()
+        self.post = FallbackPostflop(self.pre)
+
+    def on_table_start(self, info):
+        try:
+            self.pre.on_table_start(info)
+        except Exception:
+            if DEBUG:
+                raise
+
+    def act(self, state):
+        try:
+            if state["street"] == "preflop":
+                d = self.pre.act(state)
+            else:
+                d = self.post.act(state)      # <- plug the team's postflop module in here
+            return _legalise(d, state)
+        except Exception:
+            if DEBUG:
+                raise
+            try:
+                return {"action": "check"} if "check" in state["legal_actions"] else {"action": "fold"}
+            except Exception:
+                return {"action": "fold"}
+
+    def on_hand_end(self, summary):
+        try:
+            self.pre.on_hand_end(summary)
+        except Exception:
+            if DEBUG:
+                raise
