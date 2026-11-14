@@ -13,7 +13,7 @@ How decide() works
       loosely each seat is expected to call. The best positive option is played.
     * Stateless: all opponent information comes from `profiles` (vpip, pfr, three_bet, hands).
       Optional richer keys are used when the opponent model provides them:
-      fold_to_steal, fold_to_3bet, call_allin, call_jam (each a 0-1 frequency).
+      fold_to_steal, fold_to_3bet, fold_to_4bet, call_allin, call_jam (each a 0-1 frequency).
 """
 import base64
 import math
@@ -456,7 +456,7 @@ _PRI = {
     "bbl": (0.56, 0.33, 0.11),   # big blind facing a late-position open (CO, BTN, SB)
     "bbe": (0.70, 0.23, 0.07),   # big blind facing an earlier open
     "f3": (0.58, 0.27, 0.15),    # opener facing a 3-bet
-    "f4": (0.50, 0.20, 0.30),    # 3-bettor facing a 4-bet
+    "f4": (0.20, 0.30, 0.50),    # 3-bettor facing a 4-bet (live rounds: about one fold in five)
     "li": (0.45, 0.50, 0.05),    # limper facing a raise
 }
 _KPRI = {"ip": 10.0, "sb": 8.0, "bbl": 8.0, "bbe": 8.0, "f3": 6.0, "f4": 5.0, "li": 6.0}
@@ -521,7 +521,8 @@ class _Prof(object):
         c *= self.ml
         r *= self.mt if key not in ("f3", "f4") else self.ma
         direct = self._opt("fold_to_3bet") if key == "f3" else (
-            self._opt("fold_to_steal") if key in ("bbl", "bbe", "sb") else None)
+            self._opt("fold_to_4bet") if key == "f4" else (
+                self._opt("fold_to_steal") if key in ("bbl", "bbe", "sb") else None))
         cont = c + r
         if direct is not None:
             want = 1.0 - min(0.99, max(0.0, direct))
