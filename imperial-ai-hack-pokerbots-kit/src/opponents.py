@@ -13,6 +13,11 @@ _CJ_PRIOR = 0.35     # prior share of preflop all-ins a seat calls after raising
 _CJ_PRIOR_W = 3.0    # weight of that prior, in observations
 _CJ_MIN = 2          # observations needed before the frequency is reported
 _JAM_BB = 40         # a preflop raise to at least this many big blinds counts as all-in
+_F3_PRIOR = 0.58     # prior share of opens that fold to a (non-all-in) re-raise
+_F3_PRIOR_W = 8.0
+_F4_PRIOR = 0.20     # prior share of re-raises that fold to a (non-all-in) 4-bet
+_F4_PRIOR_W = 6.0
+_RR_MIN = 2          # observations needed before either frequency is reported
 
 
 class _SeatCounters:
@@ -30,6 +35,10 @@ class _SeatCounters:
         "showdowns",
         "jam_faced",
         "jam_called",
+        "f3_faced",
+        "f3_folded",
+        "f4_faced",
+        "f4_folded",
     )
 
     def __init__(self):
@@ -46,6 +55,10 @@ class _SeatCounters:
         self.showdowns = 0
         self.jam_faced = 0
         self.jam_called = 0
+        self.f3_faced = 0
+        self.f3_folded = 0
+        self.f4_faced = 0
+        self.f4_folded = 0
 
     def to_profile(self):
         if self.hands == 0:
@@ -79,6 +92,20 @@ class _SeatCounters:
             out["call_jam"] = round(
                 (self.jam_called + _CJ_PRIOR_W * _CJ_PRIOR)
                 / (self.jam_faced + _CJ_PRIOR_W),
+                4,
+            )
+        # Optional keys: how often this seat gives up its open to a re-raise, and its own
+        # re-raise to a 4-bet (all-in raises are covered by call_jam instead).
+        if self.f3_faced >= _RR_MIN:
+            out["fold_to_3bet"] = round(
+                (self.f3_folded + _F3_PRIOR_W * _F3_PRIOR)
+                / (self.f3_faced + _F3_PRIOR_W),
+                4,
+            )
+        if self.f4_faced >= _RR_MIN:
+            out["fold_to_4bet"] = round(
+                (self.f4_folded + _F4_PRIOR_W * _F4_PRIOR)
+                / (self.f4_faced + _F4_PRIOR_W),
                 4,
             )
         out.update({
@@ -144,6 +171,43 @@ class OpponentModel:
                 if action in ("all_in", "allin") or (bb > 0 and amount >= _JAM_BB * bb):
                     jam_by = seat
                     raisers.discard(seat)
+
+    def _record_reraise_responses(self, history):
+        """Count how the opener answers a 3-bet and how the 3-bettor answers a 4-bet."""
+        bb = 0
+        raisers = []          # seats in the order they raised
+        waiting = None        # (seat that must answer, "f3" or "f4")
+        for item in history:
+            seat, action, street = self._extract_item(item)
+            if street is not None and street not in _PREFLOP_STREETS:
+                break
+            try:
+                amount = float(item.get("amount") or 0) if isinstance(item, dict) else 0.0
+            except (TypeError, ValueError):
+                amount = 0.0
+            if action in _BLIND_ACTIONS:
+                bb = max(bb, amount)
+                continue
+            if not isinstance(seat, int) or action not in _DECISION_ACTIONS:
+                continue
+            if waiting is not None and seat == waiting[0] and action != "check":
+                c = self._ensure_seat(seat)
+                if c is not None:
+                    if waiting[1] == "f3":
+                        c.f3_faced += 1
+                        c.f3_folded += action == "fold"
+                    else:
+                        c.f4_faced += 1
+                        c.f4_folded += action == "fold"
+                waiting = None
+            if action in _AGGRESSIVE_ACTIONS:
+                is_jam = action in ("all_in", "allin") or (bb > 0 and amount >= _JAM_BB * bb)
+                raisers.append(seat)
+                waiting = None
+                if not is_jam and len(raisers) in (2, 3) and raisers[-2] != seat:
+                    waiting = (raisers[-2], "f3" if len(raisers) == 2 else "f4")
+                if len(raisers) >= 4:
+                    return
 
     def __init__(self):
         self._num_players = 8
@@ -227,6 +291,10 @@ class OpponentModel:
         history = summary.get("history") or summary.get("actions") or []
         try:
             self._record_jam_calls(history)
+        except Exception:
+            pass
+        try:
+            self._record_reraise_responses(history)
         except Exception:
             pass
         current_street = "preflop"
