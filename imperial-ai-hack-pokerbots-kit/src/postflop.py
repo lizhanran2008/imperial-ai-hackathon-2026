@@ -8,11 +8,12 @@ build.py does not know about the strategy files, so build this layout with
 `python build_postflop.py`, which bundles every src/postflop_*.py, selected
 or not.
 """
-from . import postflop_champion, postflop_ranges, postflop_value
+from . import postflop_champion, postflop_ranges, postflop_ranges_v2, postflop_value
 
 STRATEGIES = {
     "champion": postflop_champion,
     "ranges": postflop_ranges,
+    "ranges_v2": postflop_ranges_v2,
     "value": postflop_value,
 }
 SELECTED = "champion"
