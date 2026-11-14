@@ -1,48 +1,29 @@
-"""Your AlgoSoc Pokerbot.
+# Bundled source SHA-256: f77197fb3d9cac3b030bfd1d4e32f6882ec2503db5bad2f93d403e67051ef6db
+"""Generated standalone AlgoSoc Pokerbot. Do not edit by hand; run build.py."""
 
-Rename nothing: the platform imports `Agent` from this file. A fresh Agent()
-is created for every table in every round, so anything you store on `self`
-lasts one round (1,000 hands, same opponents) and is then thrown away.
+import sys as _sys
+import types as _types
 
-Upload this one file. Only the Python standard library is available.
+_PKG_NAME = 'src'
+_pkg = _types.ModuleType(_PKG_NAME)
+_pkg.__path__ = []
+_sys.modules[_PKG_NAME] = _pkg
 
-act(state) must return within 10 ms, and your thinking time across a round
-must stay under the 10 s time bank. If it raises an error or times out,
-you check when you can and fold otherwise. README.md lists what happens
-for each kind of illegal action.
-"""
-import random
+_MODULE_SOURCES = {
+    'common': '"""Shared constants, position helpers, and action validation."""\n\nVALID_STYLES = (\n    "unknown",\n    "tight_passive",\n    "tight_aggressive",\n    "loose_passive",\n    "loose_aggressive",\n    "maniac",\n)\n\nDEFAULT_PROFILE = {\n    "hands": 0,\n    "vpip": 0.25,\n    "pfr": 0.15,\n    "three_bet": 0.06,\n    "aggression": 0.40,\n    "fold_to_bet": 0.50,\n    "showdown": 0.30,\n    "style": "unknown",\n}\n\n\ndef position(state):\n    """Return active seats after the button (0 for the button itself)."""\n    folded = state["folded"]\n    seat = state["seat"]\n    button = state["button"]\n    n = len(folded)\n    if seat == button:\n        return 0\n    count = 0 if folded[button] else 1\n    for step in range(1, n + 1):\n        idx = (button + step) % n\n        if idx == seat:\n            return count\n        if not folded[idx]:\n            count += 1\n    return 0\n\n\ndef _fallback_action(legal, to_call):\n    if to_call == 0 and "check" in legal:\n        return {"action": "check"}\n    if "fold" in legal:\n        return {"action": "fold"}\n    if "check" in legal:\n        return {"action": "check"}\n    if "call" in legal:\n        return {"action": "call"}\n    return {"action": "fold"}\n\n\ndef safe_action(state, action):\n    """Coerce an action dict into a legal action for the current state."""\n    legal = state.get("legal_actions") or []\n    to_call = state.get("to_call", 0)\n    min_raise = state.get("min_raise_to")\n    max_raise = state.get("max_raise_to")\n\n    if not isinstance(action, dict):\n        return _fallback_action(legal, to_call)\n\n    kind = action.get("action")\n\n    if kind == "all_in":\n        if "raise" in legal and max_raise is not None:\n            return {"action": "all_in"}\n        if to_call == 0 and "check" in legal:\n            return {"action": "check"}\n        if "call" in legal:\n            return {"action": "call"}\n        return _fallback_action(legal, to_call)\n\n    if kind == "raise":\n        if "raise" in legal and min_raise is not None and max_raise is not None:\n            raw_amount = action.get("amount", min_raise)\n            try:\n                amount = int(raw_amount)\n            except (TypeError, ValueError, OverflowError):\n                amount = int(min_raise)\n            clamped = max(int(min_raise), min(int(max_raise), amount))\n            return {"action": "raise", "amount": clamped}\n        if to_call == 0 and "check" in legal:\n            return {"action": "check"}\n        if "call" in legal:\n            return {"action": "call"}\n        return _fallback_action(legal, to_call)\n\n    if kind == "call":\n        if to_call == 0 and "check" in legal:\n            return {"action": "check"}\n        if "call" in legal:\n            return {"action": "call"}\n        return _fallback_action(legal, to_call)\n\n    if kind == "check":\n        if to_call == 0 and "check" in legal:\n            return {"action": "check"}\n        return _fallback_action(legal, to_call)\n\n    if kind == "fold":\n        if "fold" in legal:\n            return {"action": "fold"}\n        return _fallback_action(legal, to_call)\n\n    return _fallback_action(legal, to_call)\n',
+    'handeval': '"""Hand evaluation stub (owned by Macro1027)."""\n\n_RANK_ORDER = "23456789TJQKA"\n\n\ndef rank(cards):\n    """Return a comparable rank tuple for 5-7 card strings (stub)."""\n    ranks = sorted((_RANK_ORDER.index(c[0]) for c in cards), reverse=True)\n    return (0, *ranks[:5])\n\n\ndef describe(hole_cards, board):\n    """Return a minimal hand classification dict (stub)."""\n    board_ranks = {_RANK_ORDER.index(c[0]) for c in board} if board else set()\n    top_board = max(board_ranks) if board_ranks else -1\n    overcards = sum(1 for c in hole_cards if _RANK_ORDER.index(c[0]) > top_board)\n    return {\n        "category": 0,\n        "made": "high_card",\n        "flush_draw": False,\n        "straight_draw": "none",\n        "overcards": overcards,\n    }\n',
+    'preflop': '"""Preflop strategy stub preserving starter bot behaviour (owned by cntrlaltdlt)."""\n\n_RANK_ORDER = "23456789TJQKA"\n\n\ndef hand_class(hole_cards):\n    """Return canonical starting hand name such as \'AKs\', \'AKo\', or \'TT\'."""\n    r0, s0 = hole_cards[0][0], hole_cards[0][1]\n    r1, s1 = hole_cards[1][0], hole_cards[1][1]\n    i0 = _RANK_ORDER.index(r0)\n    i1 = _RANK_ORDER.index(r1)\n    if i0 < i1:\n        r0, r1 = r1, r0\n    if r0 == r1:\n        return f"{r0}{r1}"\n    suffix = "s" if s0 == s1 else "o"\n    return f"{r0}{r1}{suffix}"\n\n\ndef hand_strength(hole_cards):\n    """Return a 0-1 starting hand strength estimate (stub)."""\n    ranks = sorted(_RANK_ORDER.index(c[0]) for c in hole_cards)\n    pair_bonus = 0.25 if ranks[0] == ranks[1] else 0.0\n    suited_bonus = 0.05 if hole_cards[0][1] == hole_cards[1][1] else 0.0\n    base = (ranks[0] + ranks[1]) / 24.0 * 0.7\n    return min(1.0, base + pair_bonus + suited_bonus)\n\n\ndef decide(state, profiles):\n    """Starter-equivalent preflop decision stub."""\n    legal = state["legal_actions"]\n    hole = state["hole_cards"]\n    ranks = sorted(_RANK_ORDER.index(c[0]) for c in hole)\n    strong = ranks[0] == ranks[1] or ranks[1] >= 11  # pair or K+ high\n\n    if strong and "raise" in legal:\n        target = state["min_raise_to"] + state["pot"] // 2\n        return {"action": "raise", "amount": min(target, state["max_raise_to"])}\n    if "check" in legal:\n        return {"action": "check"}\n    if state["to_call"] <= state["big_blind"] * 2 or strong:\n        return {"action": "call"}\n    return {"action": "fold"}\n',
+    'opponents': '"""Opponent modelling stub (owned by Davidlikestoprogram)."""\n\nfrom . import common\n\n\nclass OpponentModel:\n    """Per-round opponent tracker returning population defaults (stub)."""\n\n    def __init__(self):\n        self._num_players = 8\n        self._profiles = {}\n\n    def start(self, info):\n        """Initialise table state once before the first hand."""\n        self._num_players = int(info.get("num_players", 8)) if isinstance(info, dict) else 8\n        self._profiles = {\n            seat: dict(common.DEFAULT_PROFILE) for seat in range(self._num_players)\n        }\n\n    def observe(self, summary):\n        """Record a completed hand summary (stub no-op, never raises)."""\n        if not isinstance(summary, dict):\n            return\n\n    def profiles(self):\n        """Return per-seat profile dicts for all seats at the table."""\n        if not self._profiles:\n            return {\n                seat: dict(common.DEFAULT_PROFILE) for seat in range(self._num_players)\n            }\n        return {seat: dict(prof) for seat, prof in self._profiles.items()}\n',
+    'postflop': '"""Postflop strategy stub preserving starter bot behaviour (owned by Macro1027)."""\n\n_RANK_ORDER = "23456789TJQKA"\n\n\ndef decide(state, profiles):\n    """Starter-equivalent postflop decision stub."""\n    legal = state["legal_actions"]\n    hole = state["hole_cards"]\n    ranks = sorted(_RANK_ORDER.index(c[0]) for c in hole)\n    strong = ranks[0] == ranks[1] or ranks[1] >= 11  # pair or K+ high\n\n    if strong and "raise" in legal:\n        target = state["min_raise_to"] + state["pot"] // 2\n        return {"action": "raise", "amount": min(target, state["max_raise_to"])}\n    if "check" in legal:\n        return {"action": "check"}\n    if state["to_call"] <= state["big_blind"] * 2 or strong:\n        return {"action": "call"}\n    return {"action": "fold"}\n',
+    'agent': '"""Tournament Agent entrypoint integrating opponent model and strategy modules."""\n\nfrom . import common, postflop, preflop\nfrom .opponents import OpponentModel\n\n\nclass Agent:\n    """AlgoSoc Pokerbots Agent delegating to preflop/postflop/opponent modules."""\n\n    def __init__(self):\n        self.seat = None\n        self.model = OpponentModel()\n\n    def on_table_start(self, info):\n        """Initialise per-round opponent model."""\n        self.seat = info.get("seat") if isinstance(info, dict) else None\n        self.model = OpponentModel()\n        self.model.start(info)\n\n    def act(self, state):\n        """Route decision to preflop/postflop and enforce legal action safety."""\n        try:\n            profiles = self.model.profiles()\n            if state.get("street") == "preflop":\n                raw = preflop.decide(state, profiles)\n            else:\n                raw = postflop.decide(state, profiles)\n            return common.safe_action(state, raw)\n        except Exception:\n            return common.safe_action(state, None)\n\n    def on_hand_end(self, summary):\n        """Forward completed hand summary to opponent model."""\n        try:\n            self.model.observe(summary)\n        except Exception:\n            pass\n',
+}
 
+for _mod_name, _mod_src in _MODULE_SOURCES.items():
+    _full_name = f'{_PKG_NAME}.{_mod_name}'
+    _mod = _types.ModuleType(_full_name)
+    _mod.__package__ = _PKG_NAME
+    _sys.modules[_full_name] = _mod
+    setattr(_pkg, _mod_name, _mod)
+    exec(compile(_mod_src, f'src/{_mod_name}.py', 'exec'), _mod.__dict__)
 
-class Agent:
-    def __init__(self):
-        self.rng = random.Random()
-
-    def on_table_start(self, info):
-        """Optional. info: seat, num_players, hands, starting_stack, big_blind, ..."""
-        self.seat = info["seat"]
-
-    def act(self, state):
-        """Return {"action": "fold" | "check" | "call" | "raise" | "all_in"}.
-
-        For "raise", also give "amount": the total you want your bet to be
-        this street ("raise to"), between state["min_raise_to"] and
-        state["max_raise_to"]. Every state field is listed in README.md.
-        """
-        legal = state["legal_actions"]
-        hole = state["hole_cards"]          # e.g. ["As", "Kd"]
-        ranks = sorted("23456789TJQKA".index(c[0]) for c in hole)
-        strong = ranks[0] == ranks[1] or ranks[1] >= 11  # pair or J+ high
-
-        if strong and "raise" in legal:
-            target = state["min_raise_to"] + state["pot"] // 2
-            return {"action": "raise", "amount": min(target, state["max_raise_to"])}
-        if "check" in legal:
-            return {"action": "check"}
-        if state["to_call"] <= state["big_blind"] * 2 or strong:
-            return {"action": "call"}
-        return {"action": "fold"}
-
-    def on_hand_end(self, summary):
-        """Optional. summary: board, shown cards, winners, stacks, full history."""
-        pass
+Agent = _sys.modules[f'{_PKG_NAME}.agent'].Agent

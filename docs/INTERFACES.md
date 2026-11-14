@@ -2,11 +2,16 @@
 
 ## Contract registry
 
-No application interfaces exist yet. At kickoff, the integration lead adds a row for every cross-module boundary before assigning dependent implementation.
+Cross-module boundaries for the AlgoSoc Pokerbots integration (authoritative details in [PROJECT.md](../PROJECT.md) and [kit README](../imperial-ai-hack-pokerbots-kit/README.md)):
 
 | Contract / canonical path | Human owner | Producers / consumers | Status / compatibility |
 | --- | --- | --- | --- |
-| Not selected yet | TBD | TBD | UNCONFIGURED |
+| `imperial-ai-hack-pokerbots-kit/src/common.py` (`DEFAULT_PROFILE`, `position(state)`, `safe_action(state, action)`) | lizhanran2008 | Producer: integration; Consumers: `agent.py`, `preflop.py`, `postflop.py`, `opponents.py` | Active (v1) |
+| `imperial-ai-hack-pokerbots-kit/src/preflop.py` (`decide(state, profiles)`, `hand_class(hole_cards)`, `hand_strength(hole_cards)`) | cntrlaltdlt | Producer: preflop; Consumers: `agent.py`, `postflop.py`, `opponents.py` | Active (v1 stub) |
+| `imperial-ai-hack-pokerbots-kit/src/handeval.py` (`rank(cards)`, `describe(hole_cards, board)`) | Macro1027 | Producer: postflop; Consumers: `postflop.py`, `opponents.py` | Active (v1 stub) |
+| `imperial-ai-hack-pokerbots-kit/src/postflop.py` (`decide(state, profiles)`) | Macro1027 | Producer: postflop; Consumer: `agent.py` | Active (v1 stub) |
+| `imperial-ai-hack-pokerbots-kit/src/opponents.py` (`OpponentModel`: `start(info)`, `observe(summary)`, `profiles()`) | Davidlikestoprogram | Producer: opponents; Consumer: `agent.py` | Active (v1 stub) |
+| `imperial-ai-hack-pokerbots-kit/src/agent.py` & generated `bot.py` (`Agent`: `on_table_start`, `act`, `on_hand_end`) | lizhanran2008 | Producer: `build.py`; Consumer: tournament engine / `local_sim.py` | Active (v1) |
 
 Once the stack is chosen, prefer one machine-readable canonical schema/type/API specification per boundary. Link it here; do not maintain competing definitions in multiple documents or invent a schema language in advance.
 
@@ -35,6 +40,7 @@ Before editing a shared file, the lead assigns one writer and lists dependent ta
 | Shared path/group | Assigned owner | Change rule |
 | --- | --- | --- |
 | Governance docs and templates | Integration lead | PR; affected owners acknowledge changes |
-| Application shared paths | TBD at kickoff | Assign before first concurrent implementation |
+| `imperial-ai-hack-pokerbots-kit/build.py`, `src/common.py`, `src/agent.py`, `bot.py` | lizhanran2008 | PR; affected strategy/opponent owners acknowledge contract changes |
+| `imperial-ai-hack-pokerbots-kit/engine/` | Read-only (organisers) | Never modify |
 
 Adding a dependency requires its purpose and affected commands in the task/PR. Use the agreed package manager to regenerate its lockfile; do not hand-splice conflicting lockfiles. Migrations require an explicit order and a data-preservation/recovery plan proportionate to the change.
