@@ -32,3 +32,4 @@ Once integrations are chosen, commit `.env.example` with variable names and dumm
 ## Enforcement status
 
 Current rules are team agreements. GitHub reported that branch protection requires a plan upgrade for this private repository; main is not technically protected. No application CI or automatic merge service is configured. The integration lead operates the merge queue manually through PRs.
+
