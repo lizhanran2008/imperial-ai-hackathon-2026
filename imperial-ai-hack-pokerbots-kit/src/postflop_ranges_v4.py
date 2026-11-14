@@ -1,6 +1,6 @@
 """Postflop strategy "ranges_v4": ranges_v3 made harder to play against.
 
-Experimental: not imported by src/postflop.py and not bundled by build.py.
+The tournament Agent calls this policy and forwards completed hands to it.
 
 The model and the machinery are ranges_v3's (board table -> opponent ranges ->
 stratified trials -> one EV table -> fallback). v3 was only ever measured
@@ -740,6 +740,14 @@ class _Table:
 
 _tables = {}
 _LAST = [None]       # the table used by the most recent decision, for observe()
+
+
+def start_table(seat, num_players):
+    """Start a fresh round before any hand summaries arrive."""
+    if _LAST[0] is _tables.get(seat):
+        _LAST[0] = None
+    table = _tables[seat] = _Table(num_players)
+    table.seat = seat
 
 
 def _profiles(profiles, seats, hero):
@@ -1496,7 +1504,7 @@ def _decide(state, profiles, out):
 
     tb = _tables.get(seat)
     hand = state["hand_number"]
-    if tb is None or tb.n != n or tb.hand is None or hand < tb.hand:
+    if tb is None or tb.n != n or (tb.hand is not None and hand < tb.hand):
         tb = _tables[seat] = _Table(n)          # a new round: forget everything
     if hand != tb.hand or tb.done > len(state["history"]):
         tb.hand = hand
@@ -1671,7 +1679,7 @@ def decide(state, profiles):
     return action
 
 
-def observe(summary):
+def observe(summary, seat=None):
     """Optional: call with the on_hand_end summary of every hand.
 
     Counts the opponents' actions this module was not shown while deciding,
@@ -1679,15 +1687,15 @@ def observe(summary):
     bets was a bluff. Never raises unless PARAMS["raise_errors"] is set. Safe
     to leave uncalled: the module then learns only from what decide() sees."""
     try:
-        _observe(summary)
+        _observe(summary, seat)
     except Exception:
         if PARAMS["raise_errors"]:
             raise
         STATS["observe_errors"] += 1
 
 
-def _observe(summary):
-    tb = _LAST[0]
+def _observe(summary, seat):
+    tb = _LAST[0] if seat is None else _tables.get(seat)
     if tb is None or not isinstance(summary, dict):
         return
     history = summary.get("history") or []

@@ -6,10 +6,11 @@ import os
 import random
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src import handeval, postflop  # noqa: E402
+from src import agent, handeval, postflop  # noqa: E402
 
 
 def river_state(board, hole, pot=300, to_call=100, legal=("fold", "call")):
@@ -27,6 +28,42 @@ def river_state(board, hole, pot=300, to_call=100, legal=("fold", "call")):
 
 
 ROYAL = ["As", "Ks", "Qs", "Js", "Ts"]
+
+
+class ActivePostflopStrategy(unittest.TestCase):
+    def test_agent_routes_non_chop_to_ranges_v4(self):
+        state = river_state(["As", "Ks", "Qs", "Js", "9s"], ["2h", "8d"])
+        bot = agent.Agent()
+        bot.on_table_start({"seat": 0, "num_players": 2})
+        with patch.object(agent.postflop_ranges_v4, "decide", return_value={"action": "fold"}) as decide:
+            self.assertEqual(bot.act(state), {"action": "fold"})
+        decide.assert_called_once_with(state, bot.model.profiles())
+
+    def test_agent_calls_large_bet_on_guaranteed_chop(self):
+        state = river_state(ROYAL, ["2h", "8d"], pot=2200, to_call=1800)
+        with patch.object(agent.postflop_ranges_v4, "decide", return_value={"action": "fold"}) as decide:
+            self.assertEqual(agent.Agent().act(state), {"action": "call"})
+        decide.assert_not_called()
+
+    def test_agent_observes_before_first_postflop_decision_and_resets_next_round(self):
+        bot = agent.Agent()
+        info = {"seat": 0, "num_players": 2}
+        bot.on_table_start(info)
+        summary = {
+            "hand_number": 1,
+            "board": ["Ah", "7c", "2d"],
+            "shown": {"1": ["Jh", "Jd"]},
+            "history": [{"seat": 1, "street": "flop", "action": "raise", "amount": 20}],
+        }
+        bot.on_hand_end(summary)
+        table = agent.postflop_ranges_v4._tables[0]
+        self.assertEqual(table.all_stab, [1, 1])
+        self.assertEqual(sum(bucket[1] for bucket in table.seats[1].bl), 1)
+
+        agent.Agent().on_table_start(info)
+        fresh = agent.postflop_ranges_v4._tables[0]
+        self.assertIsNot(fresh, table)
+        self.assertEqual(fresh.all_stab, [0, 0])
 
 
 class PlayingTheBoard(unittest.TestCase):
