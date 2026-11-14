@@ -17,26 +17,30 @@ cp "$kit/bot.py" "$run_dir/candidate.py"
 
 Stop if sync or build fails. If GitHub is unavailable in your agent, ask your
 teammate to sync the branch from their shell before building. For the baseline,
-use the exact uploaded `bot.py` from the integration lead. If nothing has been
-uploaded, take the generated artifact from the same verified main commit:
+copy the exact uploaded `bot.py` from the integration lead to
+`"$run_dir/baseline.py"`. If nothing has been uploaded, take the generated
+artifact from the same verified main commit:
 
 ```sh
 git show "origin/main:$kit/bot.py" > "$run_dir/baseline.py"
 ```
 
-Confirm that the baseline file is available before testing. For a quick check,
-then the full comparison:
+Run a quick check once both files are available:
 
 ```sh
 python3 "$kit/harness/eval.py" "$run_dir/baseline.py" "$run_dir/candidate.py" \
   --rounds 2 --hands 50 --workers 1
+```
 
+A clean short run prints `SMOKE_ONLY` and exits 1. Check that result before
+starting the full comparison:
+
+```sh
 python3 "$kit/harness/eval.py" "$run_dir/baseline.py" "$run_dir/candidate.py" \
   --rounds 24 --hands 1000 --workers 2 --seed 42 --json "$run_dir/report.json"
 ```
 
-A clean short run prints `SMOKE_ONLY` and exits 1. For the full run,
-`PASS` means both versions were stable and the lower bound of the paired
+For the full run, `PASS` means both versions were stable and the lower bound of the paired
 95% confidence interval was above zero. If a change only supplies data that
 strategies do not use yet, explain the expected neutral score and show
 correctness checks for the data. If the run shows timeouts, rerun with
