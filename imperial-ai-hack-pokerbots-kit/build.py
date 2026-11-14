@@ -21,6 +21,7 @@ MODULES = (
     "preflop",
     "opponents",
     "postflop",
+    "postflop_ranges_v4",
     "agent",
 )
 

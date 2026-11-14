@@ -27,6 +27,8 @@ Accept the collaborator invitation and clone the repository. Read the documents 
 
 Build before running the smoke test so it covers the current sources. The generated file records a SHA-256 digest of the bundled sources so identical inputs rebuild to the same file across checkouts. Record the reviewed commit and artifact digest in the PR handoff.
 
+The default bundle runs the current preflop and opponent model with Marco's `ranges_v4` postflop policy. The agent forwards each completed hand to the postflop learner and checks for a guaranteed split before responding to a river bet.
+
 Before asking for strategy PR review, run the [pre-PR self-test](imperial-ai-hack-pokerbots-kit/harness/README.md) and paste the result in your PR.
 
 Keep competition credentials and hand-history data tokens out of the repository.
