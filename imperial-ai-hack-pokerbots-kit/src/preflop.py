@@ -481,6 +481,17 @@ _JAM_VALUE_EQ = 0.40
 # weaker hands were called 15 times in 23 (-13,668 chips) and small 4-bets with weaker hands
 # lost 13 times in 16 (-7,242), while calling the same re-raises cost about 20 chips a hand.
 _RR_VALUE_ONLY = True
+# A light first re-raise needs the opener to fold to OUR re-raises. Sunday rounds 1-7: one seat
+# folded 86% of the time to ours (+16,063 over 245 hands); the others folded 10-71% to ours while
+# folding 57-82% to everyone else's, and cost 10,400 chips over 210 hands. Once a seat has answered
+# three of our re-raises, hands outside the top _3B_VALUE_TOP by value stop re-raising it unless it
+# has folded at least _3B_MIN_FOLD of the time.
+_3B_MIN_FOLD = 0.65
+_3B_VALUE_TOP = 0.06
+# Offsuit unpaired hands do not call a re-raise (AK re-raises instead). Sunday rounds 1-7: 39 such
+# calls lost 7,104 chips, about 180 a hand, against 65 for folding. Cheap calls are left alone.
+_RR_OFFSUIT_FOLD = True
+_RR_CHEAP = 0.22
 # Value play against loose-passive fields. A limp is the one stateless sign of a loose-passive
 # player, so these apply in limped pots and scale down when a limper's profile says he folds.
 _ISO_VAL = 0.50     # share of hands (by value) that raise over limpers
@@ -1181,11 +1192,19 @@ class PreflopBrain(object):
 
         best = "fold"
         best_ev = 0.0
-        if ev_call > 0.10 * bb and "call" in legal:
+        strong = not _RR_VALUE_ONLY or level < 2 or self._eq(0.0, _JAM_VALUE_W) >= _JAM_VALUE_EQ
+        value_hand = self._eq(0.0, _JAM_VALUE_W) >= _JAM_VALUE_EQ
+        no_call = (_RR_OFFSUIT_FOLD and level >= 2 and not value_hand and h // 13 < h % 13
+                   and not allin_A and tc > _RR_CHEAP * pot_c)
+        if ev_call > 0.10 * bb and "call" in legal and not no_call:
             best = "call"
             best_ev = ev_call
-        strong = not _RR_VALUE_ONLY or level < 2 or self._eq(0.0, _JAM_VALUE_W) >= _JAM_VALUE_EQ
-        if target is not None and strong:
+        light_ok = True
+        if level == 1 and PM_VAL[h] > _3B_VALUE_TOP:
+            seen = opp[A]._opt("fold_to_hero_3bet")
+            if seen is not None and seen < _3B_MIN_FOLD:
+                light_ok = False
+        if target is not None and strong and light_ok:
             need = 0.30 * bb
             if e_c < 0.42 and PM_VAL[h] > 0.06:       # a bluff: ask for a clearer edge
                 need = 0.60 * bb

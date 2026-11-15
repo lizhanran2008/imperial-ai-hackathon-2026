@@ -18,6 +18,9 @@ _F3_PRIOR_W = 8.0
 _F4_PRIOR = 0.20     # prior share of re-raises that fold to a (non-all-in) 4-bet
 _F4_PRIOR_W = 6.0
 _RR_MIN = 2          # observations needed before either frequency is reported
+_H3_PRIOR = 0.70     # prior share of opens that fold to OUR re-raise (seats may treat us differently)
+_H3_PRIOR_W = 4.0
+_H3_MIN = 3          # our re-raises a seat must have answered before the frequency is reported
 
 
 class _SeatCounters:
@@ -39,6 +42,8 @@ class _SeatCounters:
         "f3_folded",
         "f4_faced",
         "f4_folded",
+        "h3_faced",
+        "h3_folded",
     )
 
     def __init__(self):
@@ -59,6 +64,8 @@ class _SeatCounters:
         self.f3_folded = 0
         self.f4_faced = 0
         self.f4_folded = 0
+        self.h3_faced = 0
+        self.h3_folded = 0
 
     def to_profile(self):
         if self.hands == 0:
@@ -100,6 +107,13 @@ class _SeatCounters:
             out["fold_to_3bet"] = round(
                 (self.f3_folded + _F3_PRIOR_W * _F3_PRIOR)
                 / (self.f3_faced + _F3_PRIOR_W),
+                4,
+            )
+        # Optional key: the same fold frequency counted only on re-raises made by our own seat.
+        if self.h3_faced >= _H3_MIN:
+            out["fold_to_hero_3bet"] = round(
+                (self.h3_folded + _H3_PRIOR_W * _H3_PRIOR)
+                / (self.h3_faced + _H3_PRIOR_W),
                 4,
             )
         if self.f4_faced >= _RR_MIN:
@@ -196,6 +210,9 @@ class OpponentModel:
                     if waiting[1] == "f3":
                         c.f3_faced += 1
                         c.f3_folded += action == "fold"
+                        if waiting[2] is not None and waiting[2] == self._hero_seat:
+                            c.h3_faced += 1
+                            c.h3_folded += action == "fold"
                     else:
                         c.f4_faced += 1
                         c.f4_folded += action == "fold"
@@ -205,7 +222,7 @@ class OpponentModel:
                 raisers.append(seat)
                 waiting = None
                 if not is_jam and len(raisers) in (2, 3) and raisers[-2] != seat:
-                    waiting = (raisers[-2], "f3" if len(raisers) == 2 else "f4")
+                    waiting = (raisers[-2], "f3" if len(raisers) == 2 else "f4", seat)
                 if len(raisers) >= 4:
                     return
 
