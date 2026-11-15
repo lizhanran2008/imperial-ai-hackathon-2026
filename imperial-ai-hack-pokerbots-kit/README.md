@@ -1,3 +1,87 @@
+# Fishermen poker bot
+
+This folder holds Fishermen, our bot for the AlgoSoc Pokerbots competition: its source, the single file we upload, its tests and the tools we use to compare versions. It is built on the organisers' starter kit, which is here too.
+
+This page is about the bot itself: what it is, how it is put together and how to run it. The goals and the poker principles behind its play are in the [repository README](../README.md).
+
+## What the bot is
+
+Fishermen is a program that plays No-Limit Texas Hold'em at a table of seven or eight bots. The competition platform runs it and deals the hands.
+
+- **One file.** We upload a single Python file, `bot.py`, that imports only the standard library.
+- **One class.** The file defines a class named `Agent`. The platform creates it and calls three methods: `on_table_start(info)` once before the first hand, `act(state)` every time it is the bot's turn, and `on_hand_end(summary)` after every hand.
+- **One action per turn.** `act` returns a fold, a check, a call, a raise to a stated amount or an all-in.
+- **Memory for one round.** A round is 1,000 hands at one table against the same opponents. The platform makes a new `Agent` for every round, so what the bot has learned about a table is gone when the round ends.
+- **Tight limits.** The platform allows 10 ms for each decision and 10 s of thinking time across a round, on one CPU core with 512 MB of memory and no network. A late answer or an error is played as a check or a fold.
+
+## How it is put together
+
+We write the bot as separate modules in `src/`, one for each job. `build.py` joins them into `bot.py`, which is generated and never edited by hand.
+
+| Module | What it does |
+| --- | --- |
+| `agent.py` | The entry point. Passes each decision to the right module, makes the answer legal and turns any error into a check or a fold |
+| `preflop.py` | Decides every action before the flop |
+| `postflop*.py` | Decide every action on the flop, turn and river |
+| `handeval.py` | Finds the best five-card hand and describes a hand on a board |
+| `opponents.py` | Keeps a record of how each seat has played during the round |
+| `common.py` | Shared constants and the check that makes an action legal |
+
+Several versions of the postflop module sit side by side in `src/`. The module list at the top of `build.py` names the ones in the current build, and `agent.py` shows how they are called.
+
+What happens during a round:
+
+1. **Table start.** The platform calls `on_table_start` once. The bot starts a fresh record for every seat at the new table.
+2. **Each decision.** The platform calls `act` with the state of the hand. The bot reads its record of every seat, asks the preflop module before the flop or the postflop module after it, and makes sure the chosen action is legal under the betting rules in force before returning it.
+3. **Each hand end.** The platform calls `on_hand_end` with everything that happened in the hand, including any cards that were shown. The bot adds it to its record of each seat.
+
+## Build, run and test
+
+Run these from this folder with Python 3.9 or later. There is nothing to install.
+
+| What | Command |
+| --- | --- |
+| Build `bot.py` from `src/` | `python3 build.py` |
+| Play the bot against the house bots | `python3 local_sim.py` |
+| Play one round on fixed cards | `python3 local_sim.py --rounds 1 --hands 1000 --seed 1` |
+| Run the tests | `python3 -m unittest discover -s tests` |
+| Compare two builds of the bot | `python3 harness/eval.py OLD_BOT.py NEW_BOT.py` |
+
+`build.py` refuses to write `bot.py` if a module imports anything outside the standard library, if the file is over 200 KB or if it does not load on its own. Build before running the simulator, so that it plays the current sources.
+
+The simulator fills the empty seats with house bots and prints the bot's score in big blinds per 100 hands, with the decisions it missed through timeouts, errors or an empty time bank. Those three counts should all be zero.
+
+The comparison plays both builds through the same deals, from the same seat, against the same opponents. [harness/README.md](harness/README.md) has the full procedure.
+
+## What is in this folder
+
+Ours:
+
+| Path | What it is |
+| --- | --- |
+| `src/` | The bot's modules |
+| `build.py` | Joins the modules into `bot.py` and checks the result |
+| `bot.py` | The generated file we upload |
+| `tests/` | Tests that pin individual rules of play |
+| `harness/` | Compares two builds of the bot and reports the difference with a confidence interval |
+| `tools/` | Offline scripts used while developing a module. None of it goes into `bot.py` |
+
+From the organisers' starter kit:
+
+| Path | What it is |
+| --- | --- |
+| `engine/` | The tournament engine, the same one the platform runs. Nobody edits it |
+| `local_sim.py` | Plays bots against each other on that engine |
+| `examples/` | House bots to play against |
+| `fetch_hands.py` | Downloads our hand histories from the competition site |
+
+## Competition rules and bot API
+
+The organisers' starter-kit guide is kept below, unchanged. It is the reference for the rules of the game, the sandbox the bot runs in and the exact data the platform passes to it. One thing differs in this repository: the guide says to edit `bot.py`, but here `bot.py` is generated, so change the modules in `src/` and rebuild.
+
+<details>
+<summary>Organisers' starter-kit guide</summary>
+
 # AlgoSoc Pokerbots — Starter Kit
 
 ```
@@ -191,3 +275,5 @@ python local_sim.py --betting pot_limit
 python local_sim.py --betting fixed_limit
 python local_sim.py --raise-cap 3
 ```
+
+</details>
