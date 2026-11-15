@@ -488,6 +488,9 @@ _RR_VALUE_ONLY = True
 # has folded at least _3B_MIN_FOLD of the time.
 _3B_MIN_FOLD = 0.65
 _3B_VALUE_TOP = 0.06
+# A light re-raise needs every seat still to act to fold as well.  Sunday rounds 1-10: with three
+# or more seats left behind us a third player came in on a third of them and the line lost chips.
+_3B_MAX_BEHIND = 2
 # Offsuit unpaired hands do not call a re-raise (AK re-raises instead). Sunday rounds 1-7: 39 such
 # calls lost 7,104 chips, about 180 a hand, against 65 for folding. Cheap calls are left alone.
 _RR_OFFSUIT_FOLD = True
@@ -1203,6 +1206,8 @@ class PreflopBrain(object):
         if level == 1 and PM_VAL[h] > _3B_VALUE_TOP:
             seen = opp[A]._opt("fold_to_hero_3bet")
             if seen is not None and seen < _3B_MIN_FOLD:
+                light_ok = False
+            if len(pending) > _3B_MAX_BEHIND:
                 light_ok = False
         if target is not None and strong and light_ok:
             need = 0.30 * bb
