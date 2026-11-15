@@ -79,17 +79,18 @@ def _facing_3bet(hole):
 
 
 def _facing_open(hole):
-    """Button is seat 3. The villain opens to 60 from early position and it is folded to us in the cutoff."""
-    hist = [_act(4, "small_blind", 10), _act(5, "big_blind", 20), _act(6, "fold"),
+    """We are the button (seat 2). The villain opens to 60 from early position and it is folded to us,
+    so only the two blinds are left to act behind us."""
+    hist = [_act(3, "small_blind", 10), _act(4, "big_blind", 20), _act(5, "fold"), _act(6, "fold"),
             _act(0, "raise", 60), _act(1, "fold")]
     stacks = [2000] * N
     bets = [0] * N
-    bets[4], bets[5], bets[0] = 10, 20, 60
-    for s in (0, 4, 5):
+    bets[3], bets[4], bets[0] = 10, 20, 60
+    for s in (0, 3, 4):
         stacks[s] -= bets[s]
     return {
-        "street": "preflop", "seat": ME, "button": 3, "hole_cards": hole, "board": [],
-        "stacks": stacks, "bets": bets, "folded": [s in (1, 6) for s in range(N)],
+        "street": "preflop", "seat": ME, "button": 2, "hole_cards": hole, "board": [],
+        "stacks": stacks, "bets": bets, "folded": [s in (1, 5, 6) for s in range(N)],
         "pot": 90, "to_call": 60, "min_raise_to": 100, "max_raise_to": 2000,
         "legal_actions": ["fold", "call", "raise"], "small_blind": 10, "big_blind": 20,
         "blind_level": 0, "hand_number": 50, "betting": "no_limit", "raise_cap": None,
@@ -135,6 +136,14 @@ class ReraiseStats(unittest.TestCase):
 
 
 class LightReraisesFollowTheRecord(unittest.TestCase):
+    # These check the estimate-driven rules underneath; the TT+/AK-only rule sits on top of them.
+    def setUp(self):
+        self._rr = preflop._RR_VALUE_ONLY
+        preflop._RR_VALUE_ONLY = False
+
+    def tearDown(self):
+        preflop._RR_VALUE_ONLY = self._rr
+
     def test_fewer_light_4bets_into_a_seat_that_never_folds_to_them(self):
         never = _model([(_3bet_then_4bet, "call")] * 12)
         often = _model([(_3bet_then_4bet, "fold")] * 12)

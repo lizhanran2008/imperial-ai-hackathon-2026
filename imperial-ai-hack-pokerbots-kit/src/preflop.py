@@ -476,6 +476,28 @@ _JAM_BIG = 10.0
 _JAM_TIGHT = 0.15
 _JAM_VALUE_W = 0.04
 _JAM_VALUE_EQ = 0.40
+# Once the pot has been re-raised, raising again (a 4-bet or an all-in) is for that same value
+# line only: TT+ and AK. Everything else calls or folds. Sunday bucket rounds 1-5: all-ins with
+# weaker hands were called 15 times in 23 (-13,668 chips) and small 4-bets with weaker hands
+# lost 13 times in 16 (-7,242), while calling the same re-raises cost about 20 chips a hand.
+_RR_VALUE_ONLY = True
+# A light first re-raise needs the opener to fold to OUR re-raises. Sunday rounds 1-7: one seat
+# folded 86% of the time to ours (+16,063 over 245 hands); the others folded 10-71% to ours while
+# folding 57-82% to everyone else's, and cost 10,400 chips over 210 hands. Once a seat has answered
+# three of our re-raises, hands outside the top _3B_VALUE_TOP by value stop re-raising it unless it
+# has folded at least _3B_MIN_FOLD of the time.
+_3B_MIN_FOLD = 0.65
+_3B_VALUE_TOP = 0.06
+# A light re-raise needs every seat still to act to fold as well.  Sunday rounds 1-10: with three
+# or more seats left behind us a third player came in on a third of them and the line lost chips.
+_3B_MAX_BEHIND = 2
+# Until a seat has been seen answering re-raises, assume it does not fold: Sunday rounds 9-13 the
+# light re-raises made while still learning each seat lost chips every round.
+_3B_NEED_PROOF = True
+# Offsuit unpaired hands do not call a re-raise (AK re-raises instead). Sunday rounds 1-7: 39 such
+# calls lost 7,104 chips, about 180 a hand, against 65 for folding. Cheap calls are left alone.
+_RR_OFFSUIT_FOLD = True
+_RR_CHEAP = 0.22
 # Value play against loose-passive fields. A limp is the one stateless sign of a loose-passive
 # player, so these apply in limped pots and scale down when a limper's profile says he folds.
 _ISO_VAL = 0.50     # share of hands (by value) that raise over limpers
@@ -1176,17 +1198,32 @@ class PreflopBrain(object):
 
         best = "fold"
         best_ev = 0.0
-        if ev_call > 0.10 * bb and "call" in legal:
+        strong = not _RR_VALUE_ONLY or level < 2 or self._eq(0.0, _JAM_VALUE_W) >= _JAM_VALUE_EQ
+        value_hand = self._eq(0.0, _JAM_VALUE_W) >= _JAM_VALUE_EQ
+        no_call = (_RR_OFFSUIT_FOLD and level >= 2 and not value_hand and h // 13 < h % 13
+                   and not allin_A and tc > _RR_CHEAP * pot_c)
+        if ev_call > 0.10 * bb and "call" in legal and not no_call:
             best = "call"
             best_ev = ev_call
-        if target is not None:
+        light_ok = True
+        if level == 1 and PM_VAL[h] > _3B_VALUE_TOP:
+            seen = opp[A]._opt("fold_to_hero_3bet")
+            if seen is None and _3B_NEED_PROOF:
+                seen = opp[A]._opt("fold_to_3bet")    # what it does against anyone's re-raise
+                if seen is None:
+                    seen = 0.0                        # nothing seen yet: wait
+            if seen is not None and seen < _3B_MIN_FOLD:
+                light_ok = False
+            if len(pending) > _3B_MAX_BEHIND:
+                light_ok = False
+        if target is not None and strong and light_ok:
             need = 0.30 * bb
             if e_c < 0.42 and PM_VAL[h] > 0.06:       # a bluff: ask for a clearer edge
                 need = 0.60 * bb
             if ev_raise > best_ev + 0.25 * bb and ev_raise > need:
                 best = "raise"
                 best_ev = ev_raise
-        if ev_shove > best_ev + 0.75 * bb and ev_shove > bb and self._jam_ok(h, level, ev_shove - best_ev, tc, xA):
+        if strong and ev_shove > best_ev + 0.75 * bb and ev_shove > bb and self._jam_ok(h, level, ev_shove - best_ev, tc, xA):
             best = "shove"
             best_ev = ev_shove
         self.info = {"spot": "vs_raise", "hand": cls_name(h), "level": level, "villain_range": xA,
