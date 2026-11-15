@@ -99,6 +99,14 @@ def _jams(hole, on=True, folds=2):
 
 
 class AllInOverAReraise(unittest.TestCase):
+    # These check the estimate-driven rules underneath; the TT+/AK-only rule sits on top of them.
+    def setUp(self):
+        self._rr = preflop._RR_VALUE_ONLY
+        preflop._RR_VALUE_ONLY = False
+
+    def tearDown(self):
+        preflop._RR_VALUE_ONLY = self._rr
+
     THIN = (["Js", "Td"], ["Kd", "Qh"], ["Qs", "Td"], ["Qh", "6h"])
 
     def test_no_pair_no_ace_does_not_move_in_on_a_thin_edge(self):

@@ -476,6 +476,11 @@ _JAM_BIG = 10.0
 _JAM_TIGHT = 0.15
 _JAM_VALUE_W = 0.04
 _JAM_VALUE_EQ = 0.40
+# Once the pot has been re-raised, raising again (a 4-bet or an all-in) is for that same value
+# line only: TT+ and AK. Everything else calls or folds. Sunday bucket rounds 1-5: all-ins with
+# weaker hands were called 15 times in 23 (-13,668 chips) and small 4-bets with weaker hands
+# lost 13 times in 16 (-7,242), while calling the same re-raises cost about 20 chips a hand.
+_RR_VALUE_ONLY = True
 # Value play against loose-passive fields. A limp is the one stateless sign of a loose-passive
 # player, so these apply in limped pots and scale down when a limper's profile says he folds.
 _ISO_VAL = 0.50     # share of hands (by value) that raise over limpers
@@ -1179,14 +1184,15 @@ class PreflopBrain(object):
         if ev_call > 0.10 * bb and "call" in legal:
             best = "call"
             best_ev = ev_call
-        if target is not None:
+        strong = not _RR_VALUE_ONLY or level < 2 or self._eq(0.0, _JAM_VALUE_W) >= _JAM_VALUE_EQ
+        if target is not None and strong:
             need = 0.30 * bb
             if e_c < 0.42 and PM_VAL[h] > 0.06:       # a bluff: ask for a clearer edge
                 need = 0.60 * bb
             if ev_raise > best_ev + 0.25 * bb and ev_raise > need:
                 best = "raise"
                 best_ev = ev_raise
-        if ev_shove > best_ev + 0.75 * bb and ev_shove > bb and self._jam_ok(h, level, ev_shove - best_ev, tc, xA):
+        if strong and ev_shove > best_ev + 0.75 * bb and ev_shove > bb and self._jam_ok(h, level, ev_shove - best_ev, tc, xA):
             best = "shove"
             best_ev = ev_shove
         self.info = {"spot": "vs_raise", "hand": cls_name(h), "level": level, "villain_range": xA,

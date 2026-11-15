@@ -135,6 +135,14 @@ class ReraiseStats(unittest.TestCase):
 
 
 class LightReraisesFollowTheRecord(unittest.TestCase):
+    # These check the estimate-driven rules underneath; the TT+/AK-only rule sits on top of them.
+    def setUp(self):
+        self._rr = preflop._RR_VALUE_ONLY
+        preflop._RR_VALUE_ONLY = False
+
+    def tearDown(self):
+        preflop._RR_VALUE_ONLY = self._rr
+
     def test_fewer_light_4bets_into_a_seat_that_never_folds_to_them(self):
         never = _model([(_3bet_then_4bet, "call")] * 12)
         often = _model([(_3bet_then_4bet, "fold")] * 12)
