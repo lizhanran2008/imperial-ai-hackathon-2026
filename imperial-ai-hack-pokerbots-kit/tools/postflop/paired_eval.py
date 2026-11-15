@@ -9,11 +9,11 @@ tables. With --versus the baseline bot itself fills the other seats, so the
 candidate plays against the baseline and the baseline against itself.
 """
 import argparse
-from concurrent.futures import ProcessPoolExecutor
 import json
 import os
-from pathlib import Path
 import sys
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 KIT = HERE.parent.parent

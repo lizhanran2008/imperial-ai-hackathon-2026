@@ -1,25 +1,27 @@
-"""Postflop strategy "ranges": opponent ranges, sampled equity and exploit hooks.
+"""Postflop candidate "value": bet made hands bigger and thinner, never bluff.
 
-The design is tools/postflop/STRATEGY.md on the feat/postflop-lab branch.
 Experimental: not imported by src/postflop.py and not bundled by build.py.
-Pipeline, numbered as in STRATEGY.md:
-  1 Ranges    each live opponent has a preflop range picked by their preflop
-              action class (open, 3-bet, call, limp, check). Postflop actions
-              reweight it by the hand's strength class on the board at the time
-              of the action. The weights are applied as hands are drawn for a
-              trial (accept or redraw), so only sampled hands are classified.
-  2 Equity    heads-up on the river: every combination in the range. Otherwise
-              sampled trials. Both stop at a time budget.
-  3 Features  made-hand class, draws, board texture, stack-to-pot ratio,
-              opponents left, position, betting lead.
-  4-6         value bet / size by estimated chip gain / call / raise / stack-off.
-  7 Hooks     station, over-folder, maniac, passive-bets-big, dead bot. Each has
-              a switch and a cap in PARAMS.
-  8 Fallback  made-hand class by size of bet faced, on any error or when the
-              equity estimate got too few trials in before its time budget.
 
-Every decision follows at least one opponent action, which is a range update,
-so there is no equity cache: it would never be hit.
+This is the station hook of tools/postflop/STRATEGY.md step 7 tested alone, as
+if every opponent were a calling station. It uses the same range and equity
+model as postflop_ranges.py (steps 1 to 3) and changes only what is done with
+the numbers:
+
+  Thinner   the equity needed against the hands that call our bet is lower
+            (value_hu / value_two / value_many), and so is the equity needed
+            to raise a bet (raise_value).
+  Bigger    the bet sizes on offer start at two thirds of the pot and go up to
+            an overbet; all-in is on offer at a higher stack-to-pot ratio.
+  No bluff  a bet or raise needs a made hand (min_made) that is ahead of the
+            hands expected to continue. There are no continuation bets, no
+            semi-bluffs, no draw raises and no river bluffs. A draw can still
+            call when the price is right.
+
+It reads `profiles` only for the range model (preflop ranges, how often a seat
+bluffs and folds). None of the other exploit hooks is here.
+
+On any error, or when the equity estimate got too few trials in before its
+time budget, the fallback table decides: made-hand class by size of bet faced.
 """
 import random
 import time
@@ -29,7 +31,7 @@ from . import handeval
 PARAMS = {
     # equity
     "trials_hu": 300, "trials_multi": 300,   # targets; the budget usually stops it first
-    "budget_ms": 0.8,                        # equity loop stops this long after decide() starts
+    "budget_ms": 1.5,                        # equity loop stops this long after decide() starts
     "min_trials": 12,                        # fewer than this and the fallback table decides
     "weight_floor": 0.2,                     # below this a trial survives with probability weight/floor
     # range reweighting: multipliers by class (air, weak pair, top pair/overpair, two pair+, strong draw)
@@ -41,29 +43,21 @@ PARAMS = {
     # chance each class continues against our bet / our raise, at fold_to_bet 0.45
     "p_call": (0.12, 0.5, 0.9, 1.0, 0.8),
     "p_call_raise": (0.03, 0.15, 0.6, 1.0, 0.5),
-    # not facing a bet
-    "value_hu": 0.50, "value_two": 0.60, "value_many": 0.70,
-    "sizes": (0.33, 0.66, 1.0),              # of the pot; all-in is added when allin_spr allows
-    "allin_spr": 2.5,
+    # not facing a bet: thinner and bigger than ranges.py (0.50 / 0.60 / 0.70, sizes from 0.33)
+    "min_made": 1,                           # 1 any pair, 2 top pair or overpair, 3 two pair or better
+    "value_hu": 0.45, "value_two": 0.55, "value_many": 0.65,
+    "sizes": (0.66, 1.0, 1.5),               # of the pot; all-in is added when allin_spr allows
+    "allin_spr": 4.0,
     "size_cont_base": 1.25, "size_cont_slope": 0.45,   # continue chance scales with bet size
     "call_tighten": 0.10,                    # equity against callers lost per pot-size of extra bet
-    "cbet_freq": 0.65, "cbet_size": 0.33,
-    "semibluff_freq": 0.8, "semibluff_size": 0.66,
     # facing a bet
     "margin_hu": 0.03, "margin_multi": 0.08, "margin_per_street": 0.015, "margin_oop": 0.02,
-    "raise_value": 0.70, "raise_size": 0.75,
-    "combo_raise_freq": 0.15,
+    "raise_min_made": 2, "raise_value": 0.65, "raise_size": 1.0,
     "fold_pair_to_late_raise": True,
     # stack-off
     "stackoff": 0.55, "commit_frac": 0.5,
-    # exploit hooks: switch, then cap on how far it moves a threshold
+    # profiles are trusted after this many hands
     "min_hands": 30,
-    "hook_station": True, "station_thin": 0.05, "station_fold_to_bet": 0.25, "station_allin_spr": 4.0,
-    "hook_overfolder": True, "overfold_fold_to_bet": 0.60, "overfold_cbet_add": 0.25,
-    "overfold_river_bluff": 0.40,
-    "hook_maniac": True, "maniac_aggression": 0.70, "maniac_margin": 0.06, "maniac_slowplay": 0.5,
-    "hook_passive_big": True, "passive_aggression": 0.20, "passive_big_bet": 0.75, "passive_margin": 0.08,
-    "hook_dead": True, "dead_hands": 40,
     # set True to let exceptions out (for testing); normally they become the fallback action
     "raise_errors": False,
 }
@@ -124,7 +118,9 @@ _pools = {}
 
 def _pool(cls, prof):
     """Preflop range for an action class as a list of (card, card, weight)."""
-    step = lambda x: int(x * 20 + 0.5)
+    def step(x):
+        return int(x * 20 + 0.5)
+
     p, v, t = step(prof["pfr"]), step(prof["vpip"]), step(prof["three_bet"] * 2)
     key = (cls, p, v, t)
     pool = _pools.get(key)
@@ -481,17 +477,8 @@ def _decide(state, profiles):
     # 3. Features.
     d = handeval.describe(hole, board)
     made = _HERO_CLASS.get(d["made"], 0)
-    flush_draw = d["flush_draw"]
-    straight_draw = d["straight_draw"]
-    strong_draw = flush_draw or straight_draw == "open_ended"
-    combo_draw = flush_draw and straight_draw != "none"
     ids = [_ID[c] for c in board]
     info = _board_info(ids, len(ids) == 5)
-    counts, _, bmask, suits, _ = info
-    ranks = [r for r in range(13) if counts[r]]
-    monotone = max(suits) >= 3
-    connected = any(ranks[i + 2] - ranks[i] <= 4 for i in range(len(ranks) - 2))
-    dry = not monotone and not connected
     stack = state["stacks"][seat]
     spr = stack / float(max(pot, 1))
     n_opp = len(live)
@@ -502,28 +489,9 @@ def _decide(state, profiles):
     in_position = all((s - button - 1) % n_seats < my_pos for s in live)
     streets_left = _STREETS_LEFT[street]
 
-    pre, post, aggressor = _read_history(state["history"])
-    lead = street not in aggressor
-    if lead:
-        prev = [st for st in ("preflop", "flop", "turn") if st in aggressor and st != street]
-        lead = bool(prev) and aggressor[prev[-1]] == seat
+    pre, post, _ = _read_history(state["history"])
 
-    # 7. Exploit hooks read the profiles of the opponents still in.
     profs = {s: _profile(profiles, s) for s in live}
-    station = overfolder = maniac = dead = False
-    if p["hook_dead"]:
-        dead = all(q["hands"] >= p["dead_hands"] and q["pfr"] <= 0.02 and q["aggression"] <= 0.02
-                   and q["fold_to_bet"] >= 0.95 for q in profs.values())
-    if dead and to_call == 0 and can_raise:
-        return {"action": "raise", "amount": state["min_raise_to"]}
-    if p["hook_station"]:
-        station = any(q["style"] == "loose_passive" or
-                      (q["trusted"] and q["fold_to_bet"] <= p["station_fold_to_bet"]) for q in profs.values())
-    if p["hook_overfolder"] and not station:
-        overfolder = all(q["trusted"] and q["fold_to_bet"] >= p["overfold_fold_to_bet"] for q in profs.values())
-    if p["hook_maniac"]:
-        maniac = any(q["style"] == "maniac" or
-                     (q["trusted"] and q["aggression"] >= p["maniac_aggression"]) for q in profs.values())
 
     # 1 and 2. Ranges and equity.
     infos = {}
@@ -546,97 +514,61 @@ def _decide(state, profiles):
     else:
         eq_stack = eq if eq is not None else eq_cont if eq_cont is not None else 0.0
     stack_ok = eq_stack > p["stackoff"]
-    commits = lambda chips: chips >= p["commit_frac"] * stack
+    def commits(chips):
+        return chips >= p["commit_frac"] * stack
+
     my_bet = state["bets"][seat]
-    rnd = _RNG.random
 
     if to_call <= 0:
-        # 4. Not facing a bet.
+        # 4. Not facing a bet: bet a made hand that is ahead of the hands that
+        # call, at whichever size is estimated to win the most. Otherwise check.
         if not can_raise:
             return passive
-        if maniac and made == 3 and hu and streets_left and rnd() < p["maniac_slowplay"]:
-            return passive
         threshold = p["value_hu"] if hu else p["value_two"] if n_opp == 2 else p["value_many"]
-        if station:
-            threshold -= p["station_thin"]
-        if swc > 1e-9 and eq_cont >= threshold:
-            sizes = list(p["sizes"])
-            if station:
-                sizes = sizes[1:]
-            elif overfolder:
-                sizes = sizes[:-1]
-            if spr <= (p["station_allin_spr"] if station else p["allin_spr"]):
-                sizes.append(None)
-            best, best_ev = None, None
-            for target in dict.fromkeys(_raise_to(state, f) for f in sizes):
-                bet = target - my_bet
-                frac = bet / float(max(pot, 1))
-                if commits(bet):
-                    if not stack_ok:
-                        continue
-                    eq_called = min(eq_cont, eq_stack)
-                else:
-                    eq_called = eq_cont - p["call_tighten"] * (frac - 0.66)
-                cont = cont_base * max(0.3, p["size_cont_base"] - p["size_cont_slope"] * frac)
-                cont = min(1.0, max(0.02, cont))
-                ev = (1.0 - cont) * pot + cont * (eq_called * (pot + 2 * bet) - bet)
-                if best_ev is None or ev > best_ev:
-                    best, best_ev = target, ev
-            if best is not None:
-                return {"action": "raise", "amount": best}
+        if made < p["min_made"] or swc <= 1e-9 or eq_cont < threshold:
             return passive
-        # Bluffs: heads-up only, never into a station.
-        if hu and not station:
-            freq = p["cbet_freq"] + (p["overfold_cbet_add"] if overfolder else 0.0)
-            if lead and dry and (street == "flop" or overfolder) and made <= 1 and rnd() < freq:
-                return {"action": "raise", "amount": _raise_to(state, p["cbet_size"])}
-            if strong_draw and streets_left and rnd() < p["semibluff_freq"]:
-                target = _raise_to(state, p["semibluff_size"])
-                if not commits(target - my_bet):
-                    return {"action": "raise", "amount": target}
-            if overfolder and not streets_left and made == 0 and rnd() < p["overfold_river_bluff"]:
-                target = _raise_to(state, p["semibluff_size"])
-                if not commits(target - my_bet):
-                    return {"action": "raise", "amount": target}
+        sizes = list(p["sizes"])
+        if spr <= p["allin_spr"]:
+            sizes.append(None)
+        best, best_ev = None, None
+        for target in dict.fromkeys(_raise_to(state, f) for f in sizes):
+            bet = target - my_bet
+            frac = bet / float(max(pot, 1))
+            if commits(bet):
+                if not stack_ok:
+                    continue
+                eq_called = min(eq_cont, eq_stack)
+            else:
+                eq_called = eq_cont - p["call_tighten"] * (frac - 0.66)
+            cont = cont_base * max(0.3, p["size_cont_base"] - p["size_cont_slope"] * frac)
+            cont = min(1.0, max(0.02, cont))
+            ev = (1.0 - cont) * pot + cont * (eq_called * (pot + 2 * bet) - bet)
+            if best_ev is None or ev > best_ev:
+                best, best_ev = target, ev
+        if best is not None:
+            return {"action": "raise", "amount": best}
         return passive
 
-    # 5. Facing a bet.
+    # 5. Facing a bet: raise for value only, call on price, never raise a draw.
     price = to_call / float(pot + to_call)
     margin = (p["margin_hu"] if hu else p["margin_multi"]) + p["margin_per_street"] * streets_left
     if not in_position:
         margin += p["margin_oop"]
     raises = state.get("raises_this_street") or 1
-    bettor = aggressor.get(street)
-    if maniac:
-        margin -= p["maniac_margin"]
-    if p["hook_passive_big"] and bettor in profs:
-        q = profs[bettor]
-        is_passive = q["style"] in ("tight_passive", "loose_passive") or \
-            (q["trusted"] and q["aggression"] <= p["passive_aggression"])
-        if is_passive and to_call >= p["passive_big_bet"] * max(pot - to_call, 1):
-            margin += p["passive_margin"]
 
     call_commits = commits(to_call)
-    if can_raise and eq_cont >= p["raise_value"] and eq >= price + margin:
+    if can_raise and made >= p["raise_min_made"] and eq_cont >= p["raise_value"] and eq >= price + margin:
         target = _raise_to(state, p["raise_size"])
         if not commits(target - my_bet):
             return {"action": "raise", "amount": target}
         if stack_ok:
             return {"action": "raise", "amount": state["max_raise_to"]}
         # Strong but not strong enough to stack off: fall through to the call rules.
-    if p["fold_pair_to_late_raise"] and raises >= 2 and streets_left < 2 and d["category"] == 1 \
-            and not maniac:
+    if p["fold_pair_to_late_raise"] and raises >= 2 and streets_left < 2 and d["category"] == 1:
         return passive
     if call_commits:
         return {"action": "call"} if stack_ok and eq >= price else passive
-    if can_raise and hu and combo_draw and streets_left and not station \
-            and rnd() < p["combo_raise_freq"]:
-        target = _raise_to(state, p["raise_size"])
-        if not commits(target - my_bet):
-            return {"action": "raise", "amount": target}
     if eq >= price + margin:
-        return {"action": "call"}
-    if maniac and made >= 2 and raises == 1:
         return {"action": "call"}
     return passive
 
