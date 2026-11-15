@@ -21,6 +21,9 @@ _RR_MIN = 2          # observations needed before either frequency is reported
 _H3_PRIOR = 0.70     # prior share of opens that fold to OUR re-raise (seats may treat us differently)
 _H3_PRIOR_W = 4.0
 _H3_MIN = 3          # our re-raises a seat must have answered before the frequency is reported
+_LR_PRIOR = 0.05     # prior share of limps that re-raise when someone raises behind them
+_LR_PRIOR_W = 2.0
+_LR_MIN = 3          # raises over its limp a seat must have answered before the frequency is reported
 
 
 class _SeatCounters:
@@ -44,6 +47,8 @@ class _SeatCounters:
         "f4_folded",
         "h3_faced",
         "h3_folded",
+        "lr_faced",
+        "lr_raised",
     )
 
     def __init__(self):
@@ -66,6 +71,8 @@ class _SeatCounters:
         self.f4_folded = 0
         self.h3_faced = 0
         self.h3_folded = 0
+        self.lr_faced = 0
+        self.lr_raised = 0
 
     def to_profile(self):
         if self.hands == 0:
@@ -114,6 +121,13 @@ class _SeatCounters:
             out["fold_to_hero_3bet"] = round(
                 (self.h3_folded + _H3_PRIOR_W * _H3_PRIOR)
                 / (self.h3_faced + _H3_PRIOR_W),
+                4,
+            )
+        # Optional key: how often this seat, having limped, re-raises a raise made behind it.
+        if self.lr_faced >= _LR_MIN:
+            out["limp_reraise"] = round(
+                (self.lr_raised + _LR_PRIOR_W * _LR_PRIOR)
+                / (self.lr_faced + _LR_PRIOR_W),
                 4,
             )
         if self.f4_faced >= _RR_MIN:
@@ -185,6 +199,31 @@ class OpponentModel:
                 if action in ("all_in", "allin") or (bb > 0 and amount >= _JAM_BB * bb):
                     jam_by = seat
                     raisers.discard(seat)
+
+    def _record_limp_reraises(self, history):
+        """Count how each seat that limped answers the first raise made behind it."""
+        limpers = []
+        raised_by = None
+        for item in history:
+            seat, action, street = self._extract_item(item)
+            if street is not None and street not in _PREFLOP_STREETS:
+                break
+            if action in _BLIND_ACTIONS or not isinstance(seat, int) or action not in _DECISION_ACTIONS:
+                continue
+            if raised_by is None:
+                if action == "call":
+                    limpers.append(seat)
+                elif action in _AGGRESSIVE_ACTIONS:
+                    raised_by = seat
+                continue
+            if seat in limpers and seat != raised_by and action != "check":
+                limpers.remove(seat)
+                c = self._ensure_seat(seat)
+                if c is not None:
+                    c.lr_faced += 1
+                    c.lr_raised += action in _AGGRESSIVE_ACTIONS
+            if not limpers:
+                return
 
     def _record_reraise_responses(self, history):
         """Count how the opener answers a 3-bet and how the 3-bettor answers a 4-bet."""
@@ -312,6 +351,10 @@ class OpponentModel:
             pass
         try:
             self._record_reraise_responses(history)
+        except Exception:
+            pass
+        try:
+            self._record_limp_reraises(history)
         except Exception:
             pass
         current_street = "preflop"
