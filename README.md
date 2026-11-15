@@ -9,7 +9,7 @@ This page explains what the bot is for, the poker principles its code follows an
 - ♠️ [Anant Jain](https://www.linkedin.com/in/j-anant/) — preflop strategy, adapting decisions to opponents' behaviour, and driving the final tournament iterations.
 - ♥️ [Marco Lee](https://www.linkedin.com/in/marcolee27/) — hand evaluation and the postflop engine, estimating opponents' possible hands and evaluating actions within the time budget.
 - ♦️ [David Sun](https://www.linkedin.com/in/david-sun-imperial/) — opponent tracking and profiling, plus the analytics tools that helped us investigate match histories.
-- ♣️ Jerome Li — integration and evaluation, helping our separately developed components work together and figuring out which changes we could trust.
+- ♣️ [Jerome Li](https://www.linkedin.com/in/jerome-li-629645442/) — integration and evaluation, helping our separately developed components work together and figuring out which changes we could trust.
 
 ## Goals
 
