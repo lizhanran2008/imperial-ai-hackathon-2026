@@ -761,7 +761,7 @@ def _make_trials(hero_ids, ids, st, ranges, deadline):
     last0 = len(mem0) - 1
     need = 5 - len(ids)
     c1s, c2s, cks, css = _C1, _C2, _CK, _CS
-    nf, fv, flush, k5, s8 = _NF, _FV, _FLUSH, _K5, _S8
+    nf, flush, k5, s8 = _NF, _FLUSH, _K5, _S8
     val = st.val
     h1, h2 = hero_ids
     hidx = _CIDX[(h1, h2) if h1 < h2 else (h2, h1)]
