@@ -4,6 +4,29 @@ from . import common, handeval, postflop, postflop_ranges_v4, preflop
 from .opponents import OpponentModel
 
 
+# Sunday rounds 1-11: calling a bet of two thirds of the pot or more on the flop or turn with no pair
+# and no strong draw, in a pot with at most one preflop raise, lost chips in 8 rounds out of 9.
+_AIR = ("high_card", "board", "board_pair", "board_two_pair", "board_trips")
+_AIR_BET = 0.40     # the call as a share of the pot including the bet (0.40 is a two-thirds-pot bet)
+
+
+def _hopeless_call(state):
+    """True for a flop/turn call with nothing against a sizeable bet in a pot raised at most once."""
+    if state.get("street") not in ("flop", "turn"):
+        return False
+    pot = state.get("pot", 0)
+    if pot <= 0 or state.get("to_call", 0) < _AIR_BET * pot:
+        return False
+    raises = 0
+    for a in state.get("history", ()):
+        if a.get("street") == "preflop" and a.get("action") == "raise":
+            raises += 1
+    if raises >= 2:
+        return False
+    d = handeval.describe(state["hole_cards"], state["board"])
+    return d["made"] in _AIR and not d["flush_draw"] and d["straight_draw"] != "open_ended"
+
+
 class Agent:
     """AlgoSoc Pokerbots Agent delegating to preflop/postflop/opponent modules."""
 
@@ -35,6 +58,9 @@ class Agent:
                 raw = {"action": "call"}
             else:
                 raw = postflop_ranges_v4.decide(state, profiles)
+                if (isinstance(raw, dict) and raw.get("action") == "call"
+                        and "fold" in state["legal_actions"] and _hopeless_call(state)):
+                    raw = {"action": "fold"}
             return common.safe_action(state, raw)
         except Exception:
             return common.safe_action(state, None)
