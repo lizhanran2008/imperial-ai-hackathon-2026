@@ -1,8 +1,15 @@
-# Fishermen: a poker bot for the AlgoSoc Pokerbots competition
+# FisherMen: a poker bot for the AlgoSoc Pokerbots competition
 
-Fishermen is a Python bot that plays No-Limit Texas Hold'em against other bots. We are a team of four and built it for the 14 November 2026 Imperial AI Hackathon.
+FisherMen is a Python bot that plays No-Limit Texas Hold'em against other bots. We are a team of four and built it for the 14 November 2026 Imperial AI Hackathon, where we came **2nd out of 40+ teams**.
 
 This page explains what the bot is for, the poker principles its code follows and how to run it. If you are here to contribute, start at [Working in this repository](#working-in-this-repository).
+
+## Team
+
+- ♠️ [Anant Jain](https://www.linkedin.com/in/j-anant/) — preflop strategy, adapting decisions to opponents' behaviour, and driving the final tournament iterations.
+- ♥️ [Marco Lee](https://www.linkedin.com/in/marcolee27/) — hand evaluation and the postflop engine, estimating opponents' possible hands and evaluating actions within the time budget.
+- ♦️ [David Sun](https://www.linkedin.com/in/david-sun-imperial/) — opponent tracking and profiling, plus the analytics tools that helped us investigate match histories.
+- ♣️ Jerome Li — integration and evaluation, helping our separately developed components work together and figuring out which changes we could trust.
 
 ## Goals
 

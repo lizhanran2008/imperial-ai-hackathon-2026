@@ -1,12 +1,12 @@
-# Fishermen poker bot
+# FisherMen poker bot
 
-This folder holds Fishermen, our bot for the AlgoSoc Pokerbots competition: its source, the single file we upload, its tests and the tools we use to compare versions. It is built on the organisers' starter kit, which is here too.
+This folder holds FisherMen, our bot for the AlgoSoc Pokerbots competition: its source, the single file we upload, its tests and the tools we use to compare versions. It is built on the organisers' starter kit, which is here too.
 
 This page is about the bot itself: what it is, how it is put together and how to run it. The goals and the poker principles behind its play are in the [repository README](../README.md).
 
 ## What the bot is
 
-Fishermen is a program that plays No-Limit Texas Hold'em at a table of seven or eight bots. The competition platform runs it and deals the hands.
+FisherMen is a program that plays No-Limit Texas Hold'em at a table of seven or eight bots. The competition platform runs it and deals the hands.
 
 - **One file.** We upload a single Python file, `bot.py`, that imports only the standard library.
 - **One class.** The file defines a class named `Agent`. The platform creates it and calls three methods: `on_table_start(info)` once before the first hand, `act(state)` every time it is the bot's turn, and `on_hand_end(summary)` after every hand.
