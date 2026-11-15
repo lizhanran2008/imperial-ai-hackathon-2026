@@ -508,6 +508,17 @@ _OPEN_LIMP = 0.0    # share of hands (by value) that limp first in when not wort
 _OPEN_ADD = 0.75    # extra big blinds on every first-in raise
 _LIMP_CALL_W = 0.80  # width of the range of a seat that limped and then called a raise
 _3B_VAL = 1.0       # weight on the value a re-raise wins from limpers who also call it
+# A seat that limps and then re-raises the raise behind it is trapping, not loose-passive. Live
+# round 24: one seat did it to 17 of our 35 raises over its limp, which cost 9,214 chips with
+# hands like J4o and K5o. Once a limper is seen doing it at least _LR_TRAP of the time, only the
+# top _LR_VALUE of hands by value (88+, AQ+, AJs) raise over its limp.
+_LR_TRAP = 0.25
+_LR_VALUE = 0.06
+# After limping, an all-in (or any bet of at least _LIMP_JAM of our stack) is only called with TT+
+# or AK. Live round 26: limped 55 behind a limp-re-raiser, called its all-in and ran into KK and
+# AA. The hands we limp win 27-47% against the hands that seat has shown down there.
+_LIMP_JAM = 1.0 / 3.0
+_LIMP_JAM_CALL = frozenset([8 * 14, 9 * 14, 10 * 14, 11 * 14, 12 * 14, 12 * 13 + 11, 11 * 13 + 12])
 # Facing a 3-bet. Only the very top of a 3-betting range continues against a 4-bet, so how often
 # a 3-bettor folds follows from how wide he 3-bets: a seat that 3-bets 2% of hands never folds.
 _4B_CONT = 0.04     # share of all hands that continue against a 4-bet
@@ -963,7 +974,14 @@ class PreflopBrain(object):
                         self.info["line"] = "value shove"
                         return {"action": "raise", "amount": st["max_raise_to"]}
             value = nl > 0 and PM_VAL[h] < _ISO_VAL * stick
-            if score < w or value:
+            trap = False
+            for s in lim:
+                lr = opp[s]._opt("limp_reraise")
+                if lr is not None and lr >= _LR_TRAP:
+                    trap = True
+            if trap and PM_VAL[h] >= _LR_VALUE:
+                self.info["line"] = "no raise into a limp-re-raiser"
+            elif score < w or value:
                 if pf < 0.5 * pf0 and PM_VAL[h] < 0.15:     # sticky limpers: bigger for value
                     size += 1.0
                 if value:
@@ -1085,6 +1103,10 @@ class PreflopBrain(object):
         my_bet = bets[me]
         my_stack = stacks[me]
         my_total = my_bet + my_stack
+        if me in limpers and tc >= _LIMP_JAM * my_total and h not in _LIMP_JAM_CALL:
+            self.info = {"spot": "vs_raise", "hand": cls_name(h), "level": level,
+                         "line": "fold to a big bet after limping"}
+            return self._passive(st, False)
         self._prep(h)
 
         xA = self._agg_width(st, A, level, raises, limpers, n, button, sbs, bbs)
